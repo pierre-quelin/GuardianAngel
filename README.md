@@ -60,7 +60,7 @@ Detect
 
 cf. discord.py
 
-# Signal
+## Signal
 
 cf. https://github.com/AsamK/signal-cli
 
