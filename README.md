@@ -44,7 +44,7 @@ Detect
 * walking
 * hitchhiking
 * normal break
-* **suspicious pause**
+* **suspicious break**
 
 # Sending an alert
 
@@ -58,11 +58,11 @@ Detect
 
 ## Discord
 
-cf. discord.py
+cf. [discord.py](https://discordpy.readthedocs.io)
 
 ## Signal
 
-cf. https://github.com/AsamK/signal-cli
+cf. [signal-cli](https://github.com/AsamK/signal-cli)
 
 ## SMS
 
