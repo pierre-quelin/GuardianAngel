@@ -1,11 +1,24 @@
-# from config import CONFIG
 # import pytz
+from config import config
 import datetime
 import math
+from logger import logger
 import requests
+import time
 
-# returns the distance between two points on a spere, using the haversine formula
 def haversine(lat1, lon1, lat2, lon2):
+    """
+    Calculates the distance between two points on a sphere using the haversine formula.
+
+    Args:
+        lat1 (float): Latitude of the first point in degrees.
+        lon1 (float): Longitude of the first point in degrees.
+        lat2 (float): Latitude of the second point in degrees.
+        lon2 (float): Longitude of the second point in degrees.
+
+    Returns:
+        float: Distance between the two points in meters.
+    """
     # Convert coordinates from degrees to radians
     lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
 
@@ -23,8 +36,17 @@ def haversine(lat1, lon1, lat2, lon2):
     # Distance in meters
     return c * r
 
-# Returns speed between 2 points en m/s
 def calculate_speed(previous_point, current_point):
+    """
+    Calculates the speed between two points in meters per second.
+
+    Args:
+        previous_point (dict): Dictionary containing the previous point's data (latitude, longitude, timestamp).
+        current_point (dict): Dictionary containing the current point's data (latitude, longitude, timestamp).
+
+    Returns:
+        float: Speed between the two points in meters per second.
+    """
     # Calculate the distance between the two points
     distance = haversine(previous_point['lat'], previous_point['long'], current_point['lat'], current_point['long'])
     # Calculate the time difference in seconds
@@ -32,8 +54,6 @@ def calculate_speed(previous_point, current_point):
 
     if time_diff_seconds > 0:  # Éviter la division par zéro
         speed = distance / time_diff_seconds
-        print(f'd:{distance}m v:{speed}m/s')
-      
     else:
         speed = 0  # If time is zero or negative, speed is 0
     # Calculate speed in m/s
@@ -52,7 +72,7 @@ key_mapping = {
                                 # ADSB calculated from local pressure. See also 't' for standard pressure altitude from ADSB.
     'P': 'pressure',            # The current latest 6 hour pressure for nearest location, used to calibrate ADSB altitude.
     'C': 'course',              # course in degrees 0-360
-    'S': 'speed',               # Speed in m/s
+    'S': 'speed',               # Speed in m/s !? doubt xcontest:km/h flarm:m/s !?
     'V': 'v_speed',             # Vertical speed in m/s
     'O': 'object_type',         # Object type (see list of types at https://puretrack.io/types.json)
     'Z': 'timezone',            # Not used at the moment (Timestamp returned is Unixtime).
@@ -165,10 +185,6 @@ def parse_puretrack_record(record):
             else:
                 print(f'{element} - {prefix} not found')
 
-    if 'speed' in parsed_record:
-        print(f"speed : {parsed_record.get('speed')}m/s")
-    if 'speed_calc' in parsed_record:
-        print(f"calc speed {parsed_record.get('speed_calc')}m/s")
     return parsed_record
 
 def getPureTrackGroup(group):
@@ -189,6 +205,60 @@ def getPureTrackGroup(group):
     
     return None
 
+def getPureTrackGroupLive(group):
+    # Étape 1 : Obtenir le jeton CSRF
+    url_get_token = 'https://puretrack.io/?l=44.68131,4.62335&z=15&group={group}'
+    try:
+        response = requests.get(url_get_token)
+        response.raise_for_status()
+
+        # Vérifiez si la requête a réussi
+        if response.status_code == 200:
+            # Étape 2 : Extraire le jeton CSRF et les cookies
+            csrf_token = response.cookies.get('XSRF-TOKEN')
+            session_cookie = response.cookies.get('puretrack_session')
+
+            # Étape 3 : Préparer la requête POST avec le jeton CSRF et les cookies
+            url_post = 'https://puretrack.io/api/live'
+            headers_post = {
+                # 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0',
+                # 'Accept': 'application/json, text/plain, */*',
+                'Content-Type': 'application/json',
+                # 'X-Requested-With': 'XMLHttpRequest',
+                'X-XSRF-TOKEN': csrf_token,  # Utiliser le jeton CSRF obtenu
+                # 'Cookie': f'XSRF-TOKEN={csrf_token}; puretrack_session={session_cookie}',
+            }
+
+            data = {
+                # "b1l": "44.68863",
+                # "b1g": "4.62388",
+                # "b2l": "44.67457",
+                # "b2g": "4.60979",
+                # "s": "X-key,X-key",
+                # "o": [63, 6, 7, 17, 20],
+                "t": 360,
+                "a": None,
+                "i": 1,
+                "g": 22,
+                "l": True
+            }
+
+            response_post = requests.post(url_post, headers=headers_post, json=data)
+            response_post.raise_for_status()
+
+            if response_post.status_code == 200:
+                return response_post.json().get('data')
+            else:
+                print(f"Data recovery error")
+
+        else:
+            print("Error in obtaining CSRF token.")
+
+    except Exception as e:
+        print("Data recovery error :", e)
+    
+    return None
+
 def getPureTrackTails(key):
     url = 'https://puretrack.io/api/trails'
     headers = {
@@ -201,21 +271,10 @@ def getPureTrackTails(key):
             "from": 0
         }
     ]
-#   data = {
-#     "keys": [
-#         "X-fred-c1624", "X-tam1289", "X-sarahc1295", "X-brierre-philippe1433",
-#         "23-SHc607h5jeOFmjS4XfXVpXb26OPR", "X-lionel-pascale1428", "X-arnaud261454",
-#         "X-eric-lac", "X-joseph-bada1458", "23-qiwDsTbmqPhDdh6q6WUVXNWwtWjk",
-#         "X-lionelb-3", "X-stephane-mariton1605", "23-PEfdIkyiyl96BgwTYE4xx6p7aLu8",
-#         "X-muyor1776", "X-etienne-jkmo1704", "X-sonja-o1865", "23-Gjm3MhRIpxgk9QqzLR2r8kIQm6Cl",
-#         "X-seb261429", "X-olivier-brsm", "23-hyKRCWKxqXCLHVLCB7l2yRgiyDLt",
-#         "X-fabricej"
-#     ]
-# }
 
     params = {
-        'limit': 10, # default 14000
-        'maxage': 1440 # default 1440
+        'limit': 10, # Number of records requested. Default 14000
+        'maxage': 1440 # Maximum age of records in minutes. Default 1440 (24h)
     }
   
     try:
@@ -228,30 +287,42 @@ def getPureTrackTails(key):
     except Exception as e:
         print("Data recovery error :", e)
 
+    return None
 
 if __name__ == "__main__":
-    # group = getPureTrackGroup('a_grp')
-    # print(f"name: '{group.get('name')}'")
-    # for member in group.get('members'):
-    #     print(f"member: label:'{member.get('label')}' key:'{member.get('key')}'")
-    #     tails = getPureTrackTails(member.get('key'))
-    #     tracks = tails.get('tracks')
-    #     if tracks[0].get('count') != 0:
-    #         last = parse_puretrack_record(tracks[0].get('last'))
-    #         points = tracks[0].get('points')
-    #         for point in points:
-    #             p = parse_puretrack_record(point)
-    #             last = p
-    #             pass
-    
-    tails = getPureTrackTails('0-FE0913')
-    tracks = tails.get('tracks')
-    if tracks[0].get('count') != 0:
-        last = parse_puretrack_record(tracks[0].get('last'))
-        points = tracks[0].get('points')
-        for point in points:
-            p = parse_puretrack_record(point)
-            speed = calculate_speed(p, last)
-            last = p
-            pass
-    
+    puretrack_cfg = config.get('puretrack')
+
+    while True:    
+        grp2 = getPureTrackGroupLive(puretrack_cfg.get('group'))
+        # All known last positions
+        for data in grp2:
+            logger.debug(parse_puretrack_record(data))
+
+        # All members
+        group = getPureTrackGroup(puretrack_cfg.get('group'))
+        if group:
+            logger.debug(f"Group name: '{group.get('name')}'")
+            for member in group.get('members'):
+                logger.debug(f"Member: label:'{member.get('label')}' key:'{member.get('key')}'")
+                tails = getPureTrackTails(member.get('key'))
+                tracks = tails.get('tracks')
+                if tracks[0].get('count') != 0:
+                    # last = parse_puretrack_record(tracks[0].get('last'))
+                    # logger.debug(f"Last Point: {last}")
+                    last_timestamp = 0
+                    points = tracks[0].get('points')
+                    # Revesed, the last first
+                    for point in reversed(points):
+                        p = parse_puretrack_record(point)
+                        # If timestamp is the same, the last one is the only true
+                        if p.get('timestamp') == last_timestamp:
+                            continue
+                        last_timestamp = last.get('timestamp')
+                        logger.debug(f"Point: {p}")
+                        # speed = calculate_speed(p, last)
+                        # logger.info(f"Calculated speed: {speed} m/s")
+                        last = p
+                        pass
+        else:
+            logger.warning("Failed to retrieve group data.")
+        time.sleep(30)

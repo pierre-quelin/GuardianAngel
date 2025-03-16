@@ -1,7 +1,39 @@
 {
-    "TOKEN": "ZZZZZZZZZZZZZZZZZZZZZZZZZZ.ZZZZZZ.ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
-    "CHANNEL_ID": 0000000000000000000,
-    "DISCORD_USER_ID": 000000000000000000,
+    "logging": {
+        "level": "DEBUG",
+        "file": "application.log",
+        "format": "%(asctime)s - %(levelname)s - %(message)s"
+    },
+    "discord": {
+        "dev_site": "https://discord.com/developers/applications",
+        "bot_token":"ZZZZZZZZZZZZZZZZZZZZZZZZZZ.ZZZZZZ.ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+        "channel_id": 0000000000000000000
+    },
+    "puretrack": {
+        "access_token": "???",
+        "api_key": "???",
+        "group": "my-grp"
+    },
+    "paragliders": [
+        {
+            "name": "me",
+            "puretrack_grp": "my-grp",
+            "puretrack_key": "X-me",
+            "discord_user_id": 0,
+            "phone_number": "+33700000000",
+            "email": ""
+        },
+        {
+            "name": "another",
+            "puretrack_grp": "my-grp",
+            "puretrack_key": "X-another",
+            "discord_user_id": 0,
+            "phone_number": "+33700000000",
+            "email": ""
+        }
+    ],
+
     "PURE_TRACK_GRP": "my-grp",
-    "PURE_TRACK_KEY": "X-mykey"
+    "PURE_TRACK_KEY": "X-me",
+    "DISCORD_USER_ID": 0
 }

@@ -77,13 +77,17 @@ Others: Nexmo (Vonage), Plivo, Sinch
 # Warning criteria
 
 Zero speed for x minutes.
+
 Ground height.
+
 Loss of signal.
+
 No more PureTrack reports.
 ...
 
 “If in the last 5 minutes, the position has not changed by more than 100m (excluding “absurd” points), then the guy is on pause.”
-“and if before the pause (so between h-10 minutes and h-5 minutes) his speed exceeded 10km/h several times (excluding absurd speeds >100km/h), he was flying ... so he's just landed or crashed = suspicious pose.”
+
+“If before the pause (so between h-10 minutes and h-5 minutes) his speed exceeded 10km/h several times (excluding absurd speeds >100km/h), he was flying ... so he's just landed or crashed = suspicious break.”
 
 # Interface
 
