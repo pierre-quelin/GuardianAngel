@@ -21,5 +21,5 @@ logging.basicConfig(
     ]
 )
 
-# Create a logger instance
-logger = logging.getLogger("GuardianAngel")
+def get_logger(name):
+    return logging.getLogger(name)
