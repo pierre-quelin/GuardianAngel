@@ -4,9 +4,47 @@ import datetime
 import math
 from logger import get_logger
 import requests
+import srtm
 import time
 
 logger = get_logger(__name__)
+
+def get_elevation(lat=None, lon=None, position=None):
+    """
+    Fetches the elevation (altitude) for a given latitude and longitude using SRTM (Shuttle Radar Topography Mission) data.
+
+    Args:
+        lat (float, optional): Latitude of the location in decimal degrees. Ignored if `position` is provided.
+        lon (float, optional): Longitude of the location in decimal degrees. Ignored if `position` is provided.
+        position (dict or tuple, optional): A dictionary or tuple containing latitude and longitude.
+            If a dictionary, it should have keys 'lat' and 'long'.
+            If a tuple, it should be in the form (lat, long).
+
+    Returns:
+        int or None: The elevation (altitude) in meters above sea level if available, otherwise None.
+
+    Raises:
+        ValueError: If neither `lat`/`lon` nor `position` is provided, or if `position` is invalid.
+        Exception: If there is an issue retrieving the SRTM data or calculating the elevation.
+    """
+    # Extract latitude and longitude from position if provided
+    if position:
+        if isinstance(position, dict):
+            lat = position.get('lat')
+            lon = position.get('long')
+        elif isinstance(position, tuple) and len(position) == 2:
+            lat, lon = position
+        else:
+            raise ValueError("Invalid position format. Must be a dictionary with 'lat' and 'long' keys or a tuple (lat, long).")
+
+    # Ensure lat and lon are provided
+    if lat is None or lon is None:
+        raise ValueError("Latitude and longitude must be provided either directly or via the `position` parameter.")
+
+    # Fetch elevation using SRTM data
+    srtm_data = srtm.get_data()
+    elevation = srtm_data.get_elevation(lat, lon)
+    return elevation
 
 def haversine(lat1, lon1, lat2, lon2):
     """

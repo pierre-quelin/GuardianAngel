@@ -3,12 +3,7 @@ import time
 from config import config
 from logger import get_logger
 import puretrack_api as ptrk
-import srtm
 
-def get_elevation(lat, lon):
-    srtm_data = srtm.get_data()
-    elevation = srtm_data.get_elevation(lat, lon)
-    return elevation
 
 # from database import save_data, load_data
 # from monitoring import evaluate_status
@@ -25,22 +20,23 @@ def puretrack_polling():
         # Obtain all known last positions of paragliders in the group
         grpLive = ptrk.getPureTrackGroupLive(puretrack_cfg.get('group'))
         for data in grpLive:
-            member = ptrk.parse_puretrack_record(data)
-            logger.debug(member)
+            record_member = ptrk.parse_puretrack_record(data)
+            logger.debug(record_member)
             # If member is a paraglider
-            if paraglider := paragliders_cfg.get(member.get('key')):
+            if paraglider := paragliders_cfg.get(record_member.get('key')):
                 name = paraglider.get('name')
-                datetime = member.get('datetime')
-                position = { member.get('lat'), member.get('long') }
-                logger.info(f"'{name}' last known position {position} at {datetime}")
+                datetime = record_member.get('datetime')
+                if position := ( record_member.get('lat'), record_member.get('long') ):
+                    alt_gnd = record_member.get('alt_gps') - ptrk.get_elevation(position=position)
+                    logger.info(f"'{name}' last known position {position} and altitude {alt_gnd} at {datetime}")
 
         # Obtain all known tracks of paragliders in the group
         polling_period = 30
         if group := ptrk.getPureTrackGroup(puretrack_cfg.get('group')):
             logger.debug(f"Group name: '{group.get('name')}'")
-            for member in group.get('members'):
-                logger.debug(f"Member: label:'{member.get('label')}' key:'{member.get('key')}'")
-                if tails := ptrk.getPureTrackTails(member.get('key'), polling_period):
+            for record_member in group.get('members'):
+                logger.debug(f"Member: label:'{record_member.get('label')}' key:'{record_member.get('key')}'")
+                if tails := ptrk.getPureTrackTails(record_member.get('key'), polling_period):
                     tracks = tails.get('tracks')
                     if tracks[0].get('count') != 0:
                         # last = trk.parse_puretrack_record(tracks[0].get('last'))
@@ -53,12 +49,12 @@ def puretrack_polling():
                             if p.get('timestamp') == last_timestamp:
                                 # If timestamp is the same, the first one is the only true
                                 continue
-                            alt_gnd = p.get('alt_gps') - get_elevation(p.get('lat'), p.get('long'))
 
                             last_timestamp = p.get('timestamp')
                             logger.debug(f"Point: {p}")
-                            # speed = calculate_speed(p, last)
-                            # logger.info(f"Calculated speed: {speed} m/s")
+                            alt_gnd = p.get('alt_gps') - ptrk.get_elevation(p.get('lat'), p.get('long'))
+                            speed = ptrk.calculate_speed(p, last)
+                            logger.info(f"Calculated altitude: {alt_gnd}m speed: {speed} m/s")
                             last = p
                             pass
         else:
