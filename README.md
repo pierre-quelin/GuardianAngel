@@ -18,7 +18,7 @@ Every 1/4 hour, each Guardian Angel checks on the progress of each of the 8 Adve
 
 In the event of a suspected accident, the Guardian Angels inform the organization, which then “clears up any doubts” and, if necessary, calls for help, giving information on the last known position, direction, the color of the Adventurer's sail, etc.
 
-The idea of the virtual Guardian Angel would be to automatically monitor the Adventurers and to automatically send an alarm message to each Guardian Angel in case of doubt. 
+The idea of the virtual Guardian Angel would be to automatically monitor the Adventurers and to automatically send an alarm message to each Guardian Angel in case of doubt.
 
 Use-case
 * The guardian angel receives a discord message, e-mail, SMS, etc. from the virtual guardian angel. It says “Patrick Dupont is on a suspicious break” with an html link to his PureTrack recording.
@@ -39,7 +39,7 @@ Last known position(s)
 
 # Processing the data received
 
-Detect 
+Detect
 * flying
 * walking
 * hitchhiking
@@ -94,3 +94,56 @@ No more PureTrack reports.
 ## Status summary table
 
 Display the list of paragliders via a small web interface, highlighting those in difficulty and possibly adding a color code (green: ok red: nok).
+
+# The state machine
+
+To view the diagram, copy the code below into the online tool [PlantUML Online](http://www.plantuml.com/plantuml/).
+```plantuml
+@startuml
+
+[*] --> Root
+
+state Root {
+
+    [*] --> Unknown
+
+    note right of Unknown : Requires checking
+    state Unknown {
+        Unknown : entry()
+    }
+
+    state Flying {
+    }
+
+    note right of Clearance : Sends a message to the paraglider\nArm a timer
+    state Clearance {
+        Clearance : entry()
+    }
+
+    state Landed {
+    }
+
+    state Disconnected {
+    }
+
+    note right of Alert : Sends a message to the guardian angel\nSends a message to inform the paraglider\nArm a timer
+    state Alert {
+        Alert : entry()
+    }
+
+    Alert -> Landed : landingConfirmed()
+    Alert -> Alert : timeout()
+    Clearance -> Landed : landingConfirmed()
+    Clearance -> Alert : timeout()
+    Disconnected --> Unknown : connected()
+    Disconnected --> Alert : timeout()
+    Flying --> Clearance : nullSpeed()
+    Flying --> Alert : highSpeed()
+    Flying --> Disconnected : disconnected()
+    Landed --> Flying : flying()
+    Unknown --> Flying : [isFlying()]
+    Unknown --> Clearance : [!isFlying()]
+}
+
+@enduml
+```

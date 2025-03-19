@@ -197,6 +197,18 @@ def parse_puretrack_record(record):
     return parsed_record
 
 def getPureTrackGroup(group):
+    """
+    Fetches the details of a PureTrack group by its slug.
+
+    Args:
+        group (str): The slug (unique identifier) of the PureTrack group.
+
+    Returns:
+        dict: The JSON response containing group details if successful, otherwise None.
+
+    Raises:
+        requests.exceptions.RequestException: If the HTTP request fails.
+    """
     url = f'https://puretrack.io/api/groups/byslug/{group}'
     headers = {
         'Content-Type': 'application/json',
@@ -215,6 +227,18 @@ def getPureTrackGroup(group):
     return None
 
 def getPureTrackGroupLive(group):
+    """
+    Fetches live data for a PureTrack group.
+
+    Args:
+        group (str): The slug (unique identifier) of the PureTrack group.
+
+    Returns:
+        dict: The JSON response containing live data if successful, otherwise None.
+
+    Raises:
+        requests.exceptions.RequestException: If the HTTP request fails.
+    """
     # Step 1: Obtain the CSRF token
     url_get_token = 'https://puretrack.io/?l=44.68131,4.62335&z=15&group={group}'
     try:
@@ -268,7 +292,17 @@ def getPureTrackGroupLive(group):
 
     return None
 
-def getPureTrackTails(key):
+def getPureTrackTails(key, limit=10):
+    """
+    Fetches the trail data for a given key from the PureTrack API.
+
+    Args:
+        key (str): The unique key for the PureTrack object.
+        limit (int, optional): The number of records to request. Default is 10.
+
+    Returns:
+        dict: The JSON response from the API if successful, otherwise None.
+    """
     url = 'https://puretrack.io/api/trails'
     headers = {
         'Content-Type': 'application/json',
@@ -282,7 +316,7 @@ def getPureTrackTails(key):
     ]
 
     params = {
-        'limit': 10, # Number of records requested. Default 14000
+        'limit': limit, # Number of records requested. Default 14000
         'maxage': 1440 # Maximum age of records in minutes. Default 1440 (24h)
     }
 
@@ -297,41 +331,3 @@ def getPureTrackTails(key):
         logger.error("Data recovery error :", e)
 
     return None
-
-# if __name__ == "__main__":
-#     puretrack_cfg = config.get('puretrack')
-
-#     while True:
-#         grp2 = getPureTrackGroupLive(puretrack_cfg.get('group'))
-#         # All known last positions
-#         for data in grp2:
-#             logger.debug(parse_puretrack_record(data))
-
-#         # All members
-#         group = getPureTrackGroup(puretrack_cfg.get('group'))
-#         if group:
-#             logger.debug(f"Group name: '{group.get('name')}'")
-#             for member in group.get('members'):
-#                 logger.debug(f"Member: label:'{member.get('label')}' key:'{member.get('key')}'")
-#                 tails = getPureTrackTails(member.get('key'))
-#                 tracks = tails.get('tracks')
-#                 if tracks[0].get('count') != 0:
-#                     # last = parse_puretrack_record(tracks[0].get('last'))
-#                     # logger.debug(f"Last Point: {last}")
-#                     last_timestamp = 0
-#                     points = tracks[0].get('points')
-#                     # Revesed, the last first
-#                     for point in reversed(points):
-#                         p = parse_puretrack_record(point)
-#                         # If timestamp is the same, the last one is the only true
-#                         if p.get('timestamp') == last_timestamp:
-#                             continue
-#                         last_timestamp = last.get('timestamp')
-#                         logger.debug(f"Point: {p}")
-#                         # speed = calculate_speed(p, last)
-#                         # logger.info(f"Calculated speed: {speed} m/s")
-#                         last = p
-#                         pass
-#         else:
-#             logger.warning("Failed to retrieve group data.")
-#         time.sleep(30)
