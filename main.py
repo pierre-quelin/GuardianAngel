@@ -17,48 +17,69 @@ def puretrack_polling():
     paragliders_cfg = config.get('paragliders')
 
     while True:
-        # Obtain all known last positions of paragliders in the group
-        grpLive = ptrk.getPureTrackGroupLive(puretrack_cfg.get('group'))
-        for data in grpLive:
-            record_member = ptrk.parse_puretrack_record(data)
-            logger.debug(record_member)
-            # If member is a paraglider
-            if paraglider := paragliders_cfg.get(record_member.get('key')):
-                name = paraglider.get('name')
-                datetime = record_member.get('datetime')
-                if position := ( record_member.get('lat'), record_member.get('long') ):
-                    alt_gnd = record_member.get('alt_gps') - ptrk.get_elevation(position=position)
-                    logger.info(f"'{name}' last known position {position} and altitude {alt_gnd} at {datetime}")
+        polling_period = 15
+        # # Obtain all known last positions of paragliders in the group
+        # grpLive = ptrk.getPureTrackGroupLive(puretrack_cfg.get('group'))
+        # for data in grpLive:
+        #     record_member = ptrk.parse_puretrack_record(data)
+        #     logger.debug(record_member)
+        #     # If member is a paraglider
+        #     if paraglider := paragliders_cfg.get(record_member.get('key')):
+        #         name = paraglider.get('name')
+        #         datetime = record_member.get('datetime')
+        #         if position := ( record_member.get('lat'), record_member.get('lon') ):
+        #             alt_gnd = record_member.get('alt_gps') - ptrk.get_elevation(position=position)
+        #             logger.info(f"'{name}' last known position {position} and altitude {alt_gnd} at {datetime}")
 
-        # Obtain all known tracks of paragliders in the group
-        polling_period = 30
-        if group := ptrk.getPureTrackGroup(puretrack_cfg.get('group')):
-            logger.debug(f"Group name: '{group.get('name')}'")
-            for record_member in group.get('members'):
-                logger.debug(f"Member: label:'{record_member.get('label')}' key:'{record_member.get('key')}'")
-                if tails := ptrk.getPureTrackTails(record_member.get('key'), polling_period):
-                    tracks = tails.get('tracks')
-                    if tracks[0].get('count') != 0:
-                        # last = trk.parse_puretrack_record(tracks[0].get('last'))
-                        # logger.debug(f"Last Point: {last}")
-                        last_timestamp = 0
-                        points = tracks[0].get('points')
-                        # Revesed, the last first
-                        for point in reversed(points):
-                            p = ptrk.parse_puretrack_record(point)
-                            if p.get('timestamp') == last_timestamp:
-                                # If timestamp is the same, the first one is the only true
-                                continue
+        # # Obtain all known tracks of paragliders in the group
+        # if group := ptrk.getPureTrackGroup(puretrack_cfg.get('group')):
+        #     logger.debug(f"Group name: '{group.get('name')}'")
+        #     for record_member in group.get('members'):
+        #         logger.debug(f"Member: label:'{record_member.get('label')}' key:'{record_member.get('key')}'")
+        #         if tails := ptrk.getPureTrackTails(record_member.get('key'), polling_period):
+        #             tracks = tails.get('tracks')
+        #             if tracks[0].get('count') != 0:
+        #                 last = ptrk.parse_puretrack_record(tracks[0].get('last'))
+        #                 # logger.debug(f"Last Point: {last}")
+        #                 last_timestamp = 0
+        #                 points = tracks[0].get('points')
+        #                 # Revesed, the last first
+        #                 for point in reversed(points):
+        #                     p = ptrk.parse_puretrack_record(point)
+        #                     if p.get('timestamp') == last_timestamp:
+        #                         # If timestamp is the same, the first one is the only true
+        #                         continue
 
-                            last_timestamp = p.get('timestamp')
-                            logger.debug(f"Point: {p}")
-                            alt_gnd = p.get('alt_gps') - ptrk.get_elevation(p.get('lat'), p.get('long'))
-                            speed = ptrk.calculate_speed(p, last)
-                            logger.info(f"Calculated altitude: {alt_gnd}m speed: {speed} m/s")
-                            last = p
-                            pass
-        else:
-            logger.warning("Failed to retrieve group data.")
+        #                     last_timestamp = p.get('timestamp')
+        #                     logger.debug(f"Point: {p}")
+        #                     alt_gnd = p.get('alt_gps') - ptrk.get_elevation(p.get('lat'), p.get('lon'))
+        #                     speed = ptrk.calculate_speed(p, last)
+        #                     logger.info(f"Calculated altitude: {alt_gnd}m speed: {speed} m/s")
+        #                     last = p
+        #                     pass
+        # else:
+        #     logger.warning("Failed to retrieve group data.")
+
+        # Obtain all known tracks of paragliders in the list
+
+        for paraglider_key in paragliders_cfg:
+            if tails := ptrk.getPureTrackTails(paraglider_key, polling_period+1):
+                tracks = tails.get('tracks')
+                if tracks[0].get('count') != 0:
+                    last_ptrk_point = ptrk.parse_puretrack_record(tracks[0].get('last'))
+                    points = tracks[0].get('points')
+                    # Revesed, the last first
+                    for point in reversed(points):
+                        ptrk_point = ptrk.parse_puretrack_record(point)
+                        if ptrk_point.get('timestamp') == last_ptrk_point.get('timestamp'):
+                            # If timestamp is the same, the first record is the only true
+                            continue
+                        if (last_ptrk_point.get('speed_calc') == None):
+                            last_ptrk_point['speed_calc'] = round(ptrk.calculate_speed(ptrk_point, last_ptrk_point) * 3.6, 2)
+                        logger.info(f"Point: {last_ptrk_point}")
+                        last_ptrk_point = ptrk_point
+                        pass
+
         time.sleep(polling_period)
 
 # def monitoring():

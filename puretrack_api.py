@@ -1,13 +1,37 @@
-# import pytz
 from config import config
 import datetime
 import math
 from logger import get_logger
+import pytz
 import requests
 import srtm
 import time
+from timezonefinder import TimezoneFinder
 
 logger = get_logger(__name__)
+tzfinder = TimezoneFinder()
+
+def format_datetime(timestamp, timezone=None, format='%d/%m/%Y %H:%M:%S'):
+    """
+    Formats a Unix timestamp into a human-readable date and time string.
+
+    Args:
+        timestamp (int): The Unix timestamp to format.
+        timezone (pytz.timezone, optional): The timezone to apply. If None, UTC is used.
+        format (str, optional): The format string for strftime. Default is '%d/%m/%Y %H:%M:%S'.
+
+    Returns:
+        str: The formatted date and time string.
+    """
+    if timezone:
+        # Ensure the timezone is a valid pytz timezone
+        if isinstance(timezone, str):
+            timezone = pytz.timezone(timezone)
+        dt = datetime.datetime.fromtimestamp(timestamp, timezone)
+    else:
+        # Default to UTC if no timezone is provided
+        dt = datetime.datetime.fromtimestamp(timestamp, pytz.UTC)
+    return dt.strftime(format)
 
 def get_elevation(lat=None, lon=None, position=None):
     """
@@ -17,7 +41,7 @@ def get_elevation(lat=None, lon=None, position=None):
         lat (float, optional): Latitude of the location in decimal degrees. Ignored if `position` is provided.
         lon (float, optional): Longitude of the location in decimal degrees. Ignored if `position` is provided.
         position (dict or tuple, optional): A dictionary or tuple containing latitude and longitude.
-            If a dictionary, it should have keys 'lat' and 'long'.
+            If a dictionary, it should have keys 'lat' and 'lon'.
             If a tuple, it should be in the form (lat, long).
 
     Returns:
@@ -31,11 +55,11 @@ def get_elevation(lat=None, lon=None, position=None):
     if position:
         if isinstance(position, dict):
             lat = position.get('lat')
-            lon = position.get('long')
+            lon = position.get('lon')
         elif isinstance(position, tuple) and len(position) == 2:
             lat, lon = position
         else:
-            raise ValueError("Invalid position format. Must be a dictionary with 'lat' and 'long' keys or a tuple (lat, long).")
+            raise ValueError("Invalid position format. Must be a dictionary with 'lat' and 'lon' keys or a tuple (lat, long).")
 
     # Ensure lat and lon are provided
     if lat is None or lon is None:
@@ -88,7 +112,7 @@ def calculate_speed(previous_point, current_point):
         float: Speed between the two points in meters per second.
     """
     # Calculate the distance between the two points
-    distance = haversine(previous_point['lat'], previous_point['long'], current_point['lat'], current_point['long'])
+    distance = haversine(previous_point['lat'], previous_point['lon'], current_point['lat'], current_point['lon'])
     # Calculate the time difference in seconds
     time_diff_seconds = current_point['timestamp'] - previous_point['timestamp']
 
@@ -103,7 +127,7 @@ def calculate_speed(previous_point, current_point):
 key_mapping = {
     'T': {'name': 'timestamp', 'type': int},            # Timestamp Epoch Unix Timestamp
     'L': {'name': 'lat', 'type': float},                # Latitude
-    'G': {'name': 'long', 'type': float},               # Longitude
+    'G': {'name': 'lon', 'type': float},                # Longitude
     'K': {'name': 'key', 'type': str},                  # PureTrack key, to uniquely identify this object in PureTrack.
                                                         # If matching an aircraft, it is prefixed with Y- plus rego.
                                                         # If matches a PureTrack target, prefixed wtih X- or Z-.
@@ -132,7 +156,7 @@ key_mapping = {
     'v': {'name': 'v_speed_calc', 'type': float},       # Not used
     'f': {'name': 'flying', 'type': str},               # Not used
     'x': {'name': 'ignore', 'type': str},               # Not used
-    'g': {'name': 'ground_level', 'type': str},         # Ground level at this point
+    'g': {'name': 'ground_level', 'type': float},       # Ground level at this point
     'i': {'name': 'tracker_id', 'type': str},           # Internal puretrack ID
     'e': {'name': 'comp', 'type': str},                 # Not used?
     'c': {'name': 'colour', 'type': str},               # Colour selected by user to use on map. Generated randomly if not provided.
@@ -216,14 +240,7 @@ def parse_puretrack_record(record):
                 try:
                     # Convert the value to the specified type
                     parsed_value = key_type(value)
-                    # Special handling for timestamps
-                    if prefix == 'T':
-                        parsed_record[key_name] = parsed_value
-                        # Convert Unix timestamp to readable local time
-                        # local_time = datetime.datetime.fromtimestamp(timestamp, pytz.timezone('Europe/Paris')).strftime('%Y-%m-%d %H:%M:%S')
-                        local_time = datetime.datetime.fromtimestamp(parsed_value).strftime('%d/%m/%Y %H:%M:%S')
-                        parsed_record['datetime'] = local_time
-                    elif prefix == 'U' and value in source_mapping:
+                    if prefix == 'U' and value in source_mapping:
                         parsed_record[key_name] = source_mapping[parsed_value]
                     else:
                         parsed_record[key_name] = parsed_value
@@ -231,6 +248,31 @@ def parse_puretrack_record(record):
                     logger.warning(f"Failed to convert value '{value}' for key '{key_name}' to type {key_type.__name__}")
             else:
                 logger.warning(f"Unknown prefix '{prefix}' in element '{element}'")
+
+    # Calculated data - TODO - Can't calculate speed here
+    if parsed_record.get('lat') and parsed_record.get('lon'):
+        if parsed_record.get('alt_gps'):
+            if parsed_record.get('ground_level'):
+                altitude_above_gnd = parsed_record['alt_gps'] - parsed_record['ground_level']
+            else:
+                ground_level = get_elevation(lat=parsed_record['lat'], lon=parsed_record['lon'])
+                altitude_above_gnd = parsed_record['alt_gps'] - ground_level
+        else:
+            altitude_above_gnd = None
+
+        if parsed_record.get('timestamp'):
+            timezone = pytz.timezone(tzfinder.timezone_at(lat=parsed_record['lat'], lng=parsed_record['lon']))
+            local_time = format_datetime(parsed_record['timestamp'], timezone)
+        else:
+            local_time = None
+    else:
+        altitude_above_gnd = None
+        if parsed_record.get('timestamp'):
+            local_time = format_datetime(parsed_record['timestamp'])
+        else:
+            local_time = None
+    parsed_record['alt_gnd_calc'] = altitude_above_gnd
+    parsed_record['datetime'] = local_time
 
     return parsed_record
 
