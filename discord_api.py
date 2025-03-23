@@ -89,7 +89,7 @@ async def echo(ctx, *, message: str):
 @bot.command()
 async def check(ctx, *, member: discord.Member = None):
     try:
-        await ctx.send(f"{member.mention} is flying")
+        await ctx.send(f"{member.mention} is flying. See [PureTrack](https://puretrack.io/?l=44.91038,5.19237&z=15&group={puretrack_grp}&k={paraglider_puretrack_key})")
     except discord.HTTPException as e:
         await ctx.send(f'An error occurred while checking the user: {e}')
         logger.error(f'An error occurred while checking the user: {e}')

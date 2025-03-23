@@ -1,4 +1,3 @@
-from config import config
 import datetime
 import math
 from logger import get_logger
@@ -11,27 +10,31 @@ from timezonefinder import TimezoneFinder
 logger = get_logger(__name__)
 tzfinder = TimezoneFinder()
 
-def format_datetime(timestamp, timezone=None, format='%d/%m/%Y %H:%M:%S'):
+def get_datetime(timestamp, timezone=None):
     """
-    Formats a Unix timestamp into a human-readable date and time string.
+    Converts a Unix timestamp into a timezone-aware datetime object.
+
+    This function takes a Unix timestamp (seconds since January 1, 1970) and converts it into a `datetime` object.
+    If a timezone is provided, the resulting datetime will be localized to that timezone.
+    If no timezone is specified, the datetime will default to UTC.
 
     Args:
-        timestamp (int): The Unix timestamp to format.
-        timezone (pytz.timezone, optional): The timezone to apply. If None, UTC is used.
-        format (str, optional): The format string for strftime. Default is '%d/%m/%Y %H:%M:%S'.
+        timestamp (int): The Unix timestamp to convert.
+        timezone (pytz.timezone or str, optional): The timezone to apply. This can be a `pytz.timezone` object
+            or a string representing the timezone (e.g., "Europe/Paris"). If None, UTC is used.
 
     Returns:
-        str: The formatted date and time string.
+        datetime: A timezone-aware `datetime` object representing the given timestamp.
     """
     if timezone:
         # Ensure the timezone is a valid pytz timezone
         if isinstance(timezone, str):
             timezone = pytz.timezone(timezone)
-        dt = datetime.datetime.fromtimestamp(timestamp, timezone)
+        dt = datetime.datetime.fromtimestamp(timestamp, timezone).astimezone(pytz.UTC)
     else:
         # Default to UTC if no timezone is provided
         dt = datetime.datetime.fromtimestamp(timestamp, pytz.UTC)
-    return dt.strftime(format)
+    return dt
 
 def get_elevation(lat=None, lon=None, position=None):
     """
@@ -262,21 +265,22 @@ def parse_puretrack_record(record):
 
         if parsed_record.get('timestamp'):
             timezone = pytz.timezone(tzfinder.timezone_at(lat=parsed_record['lat'], lng=parsed_record['lon']))
-            local_time = format_datetime(parsed_record['timestamp'], timezone)
+            dt = get_datetime(parsed_record['timestamp'], timezone)
         else:
-            local_time = None
+            dt = None
     else:
         altitude_above_gnd = None
         if parsed_record.get('timestamp'):
-            local_time = format_datetime(parsed_record['timestamp'])
+            dt = get_datetime(parsed_record['timestamp'])
         else:
-            local_time = None
+            dt = None
     parsed_record['alt_gnd_calc'] = altitude_above_gnd
-    parsed_record['datetime'] = local_time
+    parsed_record['datetime'] = dt
 
+    logger.debug(f"parsePuretrackRecord: {parsed_record}")
     return parsed_record
 
-def getPureTrackGroup(group):
+def get_puretrack_group(group):
     """
     Fetches the details of a PureTrack group by its slug.
 
@@ -298,6 +302,7 @@ def getPureTrackGroup(group):
         response = requests.get(url, headers=headers)
         response.raise_for_status()
         if response.status_code == 200:
+            logger.debug(f"Response from API: {response.json().get('data')}")
             return response.json().get('data')
         else:
             logger.error(f"Data recovery error")
@@ -306,7 +311,7 @@ def getPureTrackGroup(group):
 
     return None
 
-def getPureTrackGroupLive(group):
+def get_puretrack_group_live(group):
     """
     Fetches live data for a PureTrack group.
 
@@ -360,6 +365,7 @@ def getPureTrackGroupLive(group):
             response_post.raise_for_status()
 
             if response_post.status_code == 200:
+                logger.debug(f"Response from getPureTrackGroupLive API: {response.json().get('data')}")
                 return response_post.json().get('data')
             else:
                 logger.error(f"Data recovery error")
@@ -372,7 +378,7 @@ def getPureTrackGroupLive(group):
 
     return None
 
-def getPureTrackTails(key, limit=10):
+def get_puretrack_tails(key, limit=10):
     """
     Fetches the trail data for a given key from the PureTrack API.
 
@@ -404,6 +410,7 @@ def getPureTrackTails(key, limit=10):
         response = requests.post(url, headers=headers, json=data, params=params)
         response.raise_for_status()
         if response.status_code == 200:
+            logger.debug(f"Response from getPureTrackTails API: {response.json()}")
             return response.json()
         else:
             logger.error(f"Data recovery error")

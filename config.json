@@ -1,39 +1,36 @@
 {
     "logging": {
-        "level": "DEBUG",
+        "level": "INFO",
         "file": "application.log",
-        "format": "%(asctime)s - %(levelname)s - %(message)s"
+        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     },
     "discord": {
         "dev_site": "https://discord.com/developers/applications",
         "bot_token":"ZZZZZZZZZZZZZZZZZZZZZZZZZZ.ZZZZZZ.ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
-        "channel_id": 0000000000000000000
+        "channel_id": 0
+    },
+    "database": {
+        "url": "sqlite:///paragliders.db"
     },
     "puretrack": {
         "access_token": "???",
         "api_key": "???",
         "group": "my-grp"
     },
-    "paragliders": [
-        {
+    "paragliders": {
+        "my-key": {
             "name": "me",
-            "puretrack_grp": "my-grp",
-            "puretrack_key": "X-me",
+            "puretrack_key": "my-key",
             "discord_user_id": 0,
             "phone_number": "+33700000000",
             "email": ""
         },
-        {
+        "another-key": {
             "name": "another",
-            "puretrack_grp": "my-grp",
-            "puretrack_key": "X-another",
+            "puretrack_key": "another-key",
             "discord_user_id": 0,
             "phone_number": "+33700000000",
             "email": ""
         }
-    ],
-
-    "PURE_TRACK_GRP": "my-grp",
-    "PURE_TRACK_KEY": "X-me",
-    "DISCORD_USER_ID": 0
+    }
 }

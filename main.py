@@ -3,21 +3,22 @@ import time
 from config import config
 from logger import get_logger
 import puretrack_api as ptrk
-
-
-# from database import save_data, load_data
-# from monitoring import evaluate_status
-# from alert_notification import send_alert
-# from web_interface import start_web_interface
+import database as db
 
 logger = get_logger(__name__)
 
 def puretrack_polling():
+    database_cfg = config.get('database')
     puretrack_cfg = config.get('puretrack')
     paragliders_cfg = config.get('paragliders')
 
+    db.init_db_engine(database_cfg.get('url'))
+
     while True:
+        start = time.monotonic()
         polling_period = 15
+        session = db.SessionLocal()
+
         # # Obtain all known last positions of paragliders in the group
         # grpLive = ptrk.getPureTrackGroupLive(puretrack_cfg.get('group'))
         # for data in grpLive:
@@ -60,27 +61,47 @@ def puretrack_polling():
         # else:
         #     logger.warning("Failed to retrieve group data.")
 
-        # Obtain all known tracks of paragliders in the list
-
+        # Obtain all known tracks of paragliders in the configuration file
         for paraglider_key in paragliders_cfg:
-            if tails := ptrk.getPureTrackTails(paraglider_key, polling_period+1):
+            if tails := ptrk.get_puretrack_tails(paraglider_key, polling_period+2): # +2 to ensure we get the last point
                 tracks = tails.get('tracks')
                 if tracks[0].get('count') != 0:
-                    last_ptrk_point = ptrk.parse_puretrack_record(tracks[0].get('last'))
+                    parsed_points = []
+                    last_parsed_point = ptrk.parse_puretrack_record(tracks[0].get('last'))
                     points = tracks[0].get('points')
                     # Revesed, the last first
                     for point in reversed(points):
-                        ptrk_point = ptrk.parse_puretrack_record(point)
-                        if ptrk_point.get('timestamp') == last_ptrk_point.get('timestamp'):
+                        parsed_point = ptrk.parse_puretrack_record(point)
+                        if parsed_point.get('timestamp') == last_parsed_point.get('timestamp'):
                             # If timestamp is the same, the first record is the only true
+                            logger.debug("Point: not used. Always registered the first one.")
                             continue
-                        if (last_ptrk_point.get('speed_calc') == None):
-                            last_ptrk_point['speed_calc'] = round(ptrk.calculate_speed(ptrk_point, last_ptrk_point) * 3.6, 2)
-                        logger.info(f"Point: {last_ptrk_point}")
-                        last_ptrk_point = ptrk_point
+                        if (last_parsed_point.get('speed_calc') == None):
+                            last_parsed_point['speed_calc'] = round(ptrk.calculate_speed(parsed_point, last_parsed_point), 2)
+                        logger.info(f"Point: {last_parsed_point}")
+                        parsed_points.append(last_parsed_point)
+                        last_parsed_point = parsed_point
                         pass
 
-        time.sleep(polling_period)
+                    # Add the new points to the database
+                    db.update_paraglider_data(session, paraglider_key, parsed_points)
+
+                    # Purge old points
+                    db.purge_old_data(session)
+
+                    # Calculate the average speed over the last 5 minutes
+                    avg_speed = db.calculate_average_speed(session, paraglider_key, minutes=5)
+                    avg_speed2 = db.calculate_average_speed2(session, paraglider_key, minutes=5)
+                    logger.info(f"Average speed for {paraglider_key} over the last 5 minutes: {avg_speed*3.6} {avg_speed2*3.6} km/h")
+
+        session.close()
+
+        end = time.monotonic()
+        elsapsed = end - start
+        if elsapsed < polling_period:
+            time.sleep(polling_period - elsapsed)
+        else:
+            logger.warning(f"Polling took too long: {elsapsed} seconds")
 
 # def monitoring():
 #     while True:
@@ -107,82 +128,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# from flask import Flask, render_template, request, redirect, url_for
-# from flask_mail import Mail
-# from flask_sqlalchemy import SQLAlchemy
-# from apscheduler.schedulers.background import BackgroundScheduler
-# from datetime import datetime
-# import os
-#
-# # Création de l'application Flask
-# app = Flask(__name__)
-# app.config.from_pyfile('config.py')  # Contient la configuration (DB, SMTP, etc.)
-#
-# db.init_app(app)
-# mail = Mail(app)
-#
-# # Importer les modèles
-# from models import User, Alert
-#
-# # Création de la base (si non existante)
-# with app.app_context():
-#     db.create_all()
-#
-# @app.route("/")
-# def index():
-#     users = User.query.all()
-#     return render_template("index.html", users=users)
-#
-# @app.route("/add", methods=["GET", "POST"])
-# def add_user():
-#     if request.method == "POST":
-#         new_user = User(
-#             puretrack_account=request.form["puretrack_account"],
-#             name=request.form["name"],
-#             email=request.form["email"],
-#             phone=request.form["phone"]
-#         )
-#         db.session.add(new_user)
-#         db.session.commit()
-#         return redirect(url_for("index"))
-#     return render_template("add_user.html")
-#
-# @app.route("/delete/<int:user_id>")
-# def delete_user(user_id):
-#     user = User.query.get(user_id)
-#     if user:
-#         db.session.delete(user)
-#         db.session.commit()
-#     return redirect(url_for("index"))
-#
-# # Exemple de route pour afficher les alertes
-# @app.route("/alerts")
-# def alerts():
-#     alerts = Alert.query.order_by(Alert.triggered_at.desc()).all()
-#     return render_template("alerts.html", alerts=alerts)
-#
-# @app.route("/verify/<int:alert_id>", methods=["GET", "POST"])
-# def verify_alert(alert_id):
-#     alert = Alert.query.get_or_404(alert_id)
-#     if request.method == "POST":
-#         verifier = request.form["verifier"]
-#         comment = request.form.get("comment", "")
-#         alert.checked_at = datetime.utcnow()
-#         alert.verified_by = verifier
-#         alert.comment = comment
-#         alert.checked = True
-#         db.session.commit()
-#         return redirect(url_for("alerts"))
-#     return render_template("verify_alert.html", alert=alert)
-#
-# # Scheduler pour la vérification automatique de l'API PureTrack
-# from tasks import check_aventuriers
-# scheduler = BackgroundScheduler()
-# scheduler.add_job(func=check_aventuriers, trigger="interval", minutes=1)
-# scheduler.start()
-#
-# if __name__ == "__main__":
-#     app.run(debug=True)
-
