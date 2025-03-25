@@ -1,6 +1,8 @@
+blinker
 discord.py
 pytz
 requests
 SQLAlchemy
 srtm.py
 timezonefinder
+transitions

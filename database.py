@@ -15,6 +15,7 @@ class ParagliderData(Base):
     longitude = Column(Float)
     course = Column(Float)
     speed = Column(Float)
+    speed_calc = Column(Float)
     altitude = Column(Float)
     state = Column(String)
     datetime = Column(DateTime, nullable=False)
@@ -48,6 +49,7 @@ def save_paraglider_point(session: Session, paraglider_key, point):
         longitude=point['lon'],
         course=point.get('course'),
         speed=point.get('speed'),
+        speed_calc=point.get('speed_calc'),
         altitude=point.get('alt_gps'),
         state=point.get('state'),
         datetime=point['datetime']
@@ -103,6 +105,7 @@ def calculate_average_speed(session: Session, paraglider_key, minutes=5):
     if not points:
         return 0.0
 
+    # TODO - Check if the speed is None. If so, use the calculated speed
     total_speed = sum(point.speed for point in points if point.speed is not None)
     return round(total_speed / len(points), 2)
 

@@ -4,6 +4,7 @@ from config import config
 from logger import get_logger
 import puretrack_api as ptrk
 import database as db
+from guardian_angel import GuardianAngel
 
 logger = get_logger(__name__)
 
@@ -86,13 +87,13 @@ def puretrack_polling():
                     # Add the new points to the database
                     db.update_paraglider_data(session, paraglider_key, parsed_points)
 
-                    # Purge old points
-                    db.purge_old_data(session)
-
                     # Calculate the average speed over the last 5 minutes
                     avg_speed = db.calculate_average_speed(session, paraglider_key, minutes=5)
                     avg_speed2 = db.calculate_average_speed2(session, paraglider_key, minutes=5)
                     logger.info(f"Average speed for {paraglider_key} over the last 5 minutes: {avg_speed*3.6} {avg_speed2*3.6} km/h")
+
+        # Purge old points
+        db.purge_old_data(session)
 
         session.close()
 
@@ -112,6 +113,13 @@ def puretrack_polling():
 #         time.sleep(60)  # Check every minute
 
 def main():
+    guardian_angel = GuardianAngel(cfg = config.get('guardian_angel'))
+
+    while True:
+        time.sleep(10)
+
+
+
     # Start threads
     puretrack_polling_thread = threading.Thread(target=puretrack_polling)
     # monitoring_thread = threading.Thread(target=monitoring)
