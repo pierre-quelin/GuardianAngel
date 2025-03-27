@@ -17,10 +17,16 @@ class Paraglider:
         self.discord_id = cfg.get('discord_id')
         self.phone_number = cfg.get('phone_number')
         self.email = cfg.get('email')
+
+        self.last_datetime = None
+        self.coordinates = (0.0, 0.0)
+        self.course = 0.0
+        self.altitude_gnd_calc = 0.0
         self.speed = 0.0
+        self.avg_speed = 0.0
 
         self._logger = get_logger(self.name)
-        self._machine = Machine(model=self, states=Paraglider.states, initial='Initial')
+        self._machine = Machine(model=self, states=Paraglider.states, initial='Initial', ignore_invalid_triggers=True)
         self._timer = None
         self.alert = signal('alert')
         self.clearance = signal('clearance')
@@ -49,7 +55,7 @@ class Paraglider:
 
     def on_enter_Clearance(self):
         self._logger.info(f"Entry action for Clearance state for {self.name}")
-        self.clearance.send(None, message="clearance!")
+        self.clearance.send(self, message="clearance!")
         self.arm_timer(300) # Arm a timer for 5 minutes
 
     def on_exit_Clearance(self):
@@ -58,7 +64,7 @@ class Paraglider:
 
     def on_enter_Alert(self):
         self._logger.warning(f"Entry action for Alert state for {self.name}")
-        self.alert.send(None, message="alert!")
+        self.alert.send(self, message="alert!")
         self.arm_timer(300) # Arm a timer for 5 minutes
 
     def on_exit_Alert(self):
@@ -72,13 +78,15 @@ class Paraglider:
             return True
         return False
 
-    def speed(self, speed):
+    def set_speed(self, speed):
         self._logger.info(f"Speed: {speed}")
-        if speed > 16.67: # 60km/h ou 16,67m/s
+        self.speed = speed
+
+        if self.speed > 16.67: # 60km/h ou 16,67m/s
             self.highSpeed()
-        elif speed > 2.78: # 10km/h ou 2,78m/s
+        elif self.speed > 2.78: # 10km/h ou 2,78m/s
             self.flying()
-        elif speed < 0.56: # 2km/h ou 0,56m/s
+        elif self.speed < 0.56: # 2km/h ou 0,56m/s
             self.nullSpeed()
 
     def arm_timer(self, duration):

@@ -104,14 +104,6 @@ def puretrack_polling():
         else:
             logger.warning(f"Polling took too long: {elsapsed} seconds")
 
-# def monitoring():
-#     while True:
-#         data = load_data()
-#         status = evaluate_status(data)
-#         if status:
-#             send_alert(status)
-#         time.sleep(60)  # Check every minute
-
 def main():
     guardian_angel = GuardianAngel(cfg = config.get('guardian_angel'))
 
@@ -121,16 +113,16 @@ def main():
 
 
     # Start threads
-    puretrack_polling_thread = threading.Thread(target=puretrack_polling)
+    # puretrack_polling_thread = threading.Thread(target=puretrack_polling)
     # monitoring_thread = threading.Thread(target=monitoring)
     # web_thread = threading.Thread(target=start_web_interface)
 
-    puretrack_polling_thread.start()
+    # puretrack_polling_thread.start()
     # monitoring_thread.start()
     # web_thread.start()
 
     # Join threads
-    puretrack_polling_thread.join()
+    # puretrack_polling_thread.join()
     # monitoring_thread.join()
     # web_thread.join()
 

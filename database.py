@@ -7,18 +7,19 @@ from sqlalchemy.orm import Session
 Base = declarative_base()
 SessionLocal = None  # La session sera configurée dynamiquement
 
-class ParagliderData(Base):
+class ParaglidersData(Base):
     __tablename__ = 'paraglider_data'
     id = Column(Integer, primary_key=True, index=True)
     paraglider_key = Column(String, index=True)
+    datetime = Column(DateTime, nullable=False)
     latitude = Column(Float)
     longitude = Column(Float)
     course = Column(Float)
     speed = Column(Float)
     speed_calc = Column(Float)
     altitude = Column(Float)
+    altitude_gnd_calc = Column(Float)
     state = Column(String)
-    datetime = Column(DateTime, nullable=False)
 
 def init_db_engine(database_url):
     """
@@ -43,16 +44,17 @@ def save_paraglider_point(session: Session, paraglider_key, point):
         session (Session): SQLAlchemy session.
         point (dict): A dictionary containing the point data.
     """
-    paraglider_data = ParagliderData(
+    paraglider_data = ParaglidersData(
         paraglider_key=paraglider_key,
+        datetime=point['datetime'],
         latitude=point['lat'],
         longitude=point['lon'],
         course=point.get('course'),
         speed=point.get('speed'),
         speed_calc=point.get('speed_calc'),
         altitude=point.get('alt_gps'),
-        state=point.get('state'),
-        datetime=point['datetime']
+        altitude_gnd_calc=point.get('alt_gnd_calc'),
+        state=point.get('state') # cf. Paraglider.states
     )
     session.add(paraglider_data)
 
@@ -66,7 +68,7 @@ def update_paraglider_data(session: Session, paraglider_key, points):
     """
     for point in points:
         # Vérifiez si le point existe déjà dans la base
-        existing_point = session.query(ParagliderData).filter_by(
+        existing_point = session.query(ParaglidersData).filter_by(
             paraglider_key=paraglider_key,
             datetime=point['datetime']
         ).first()
@@ -74,15 +76,64 @@ def update_paraglider_data(session: Session, paraglider_key, points):
             save_paraglider_point(session, paraglider_key, point)
     session.commit()
 
+def get_last_paraglider_state(session, paraglider_key):
+    """
+    Get the last known state of a paraglider.
+
+    Args:
+        session (Session): SQLAlchemy session.
+        paraglider_key (str): The key of the paraglider.
+
+    Returns:
+        ParaglidersData: The last known state of the paraglider.
+    """
+    last_state = session.query(ParaglidersData).filter(
+        ParaglidersData.paraglider_key == paraglider_key
+    ).order_by(ParaglidersData.datetime.desc()).first()
+
+    return last_state
+
 def get_paraglider_history(paraglider_key):
+    """
+    Get the history of a paraglider.
+    Args:
+        paraglider_key (str): The key of the paraglider.
+    Returns:
+        list: A list of ParaglidersData objects representing the history.
+    """
     session = SessionLocal()
-    thirty_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=30) # TODO - Time Zone
-    history = session.query(ParagliderData).filter(
-        ParagliderData.paraglider_key == paraglider_key,
-        ParagliderData.datetime >= thirty_minutes_ago
+    thirty_minutes_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=30) # TODO - Time Zone
+    history = session.query(ParaglidersData).filter(
+        ParaglidersData.paraglider_key == paraglider_key,
+        ParaglidersData.datetime >= thirty_minutes_ago
     ).all()
     session.close()
     return history
+
+def calculate_average_speed_old(session: Session, paraglider_key, minutes=5):
+    """
+    Calculate the average speed of a paraglider over the last X minutes.
+
+    Args:
+        session (Session): SQLAlchemy session.
+        paraglider_key (str): The key of the paraglider.
+        minutes (int): The time window in minutes.
+
+    Returns:
+        float: The average speed in m/s.
+    """
+    time_threshold = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=minutes)
+    points = session.query(ParaglidersData).filter(
+        ParaglidersData.paraglider_key == paraglider_key,
+        ParaglidersData.datetime >= time_threshold
+    ).all()
+
+    if not points:
+        return 0.0
+
+    # TODO - Check if the speed is None. If so, use the calculated speed
+    total_speed = sum(point.speed for point in points if point.speed is not None)
+    return round(total_speed / len(points), 2)
 
 def calculate_average_speed(session: Session, paraglider_key, minutes=5):
     """
@@ -94,38 +145,13 @@ def calculate_average_speed(session: Session, paraglider_key, minutes=5):
         minutes (int): The time window in minutes.
 
     Returns:
-        float: The average speed in km/h.
+        float: The average speed in m/s.
     """
-    time_threshold = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-    points = session.query(ParagliderData).filter(
-        ParagliderData.paraglider_key == paraglider_key,
-        ParagliderData.datetime >= time_threshold
-    ).all()
-
-    if not points:
-        return 0.0
-
-    # TODO - Check if the speed is None. If so, use the calculated speed
-    total_speed = sum(point.speed for point in points if point.speed is not None)
-    return round(total_speed / len(points), 2)
-
-def calculate_average_speed2(session: Session, paraglider_key, minutes=5):
-    """
-    Calculate the average speed of a paraglider over the last X minutes.
-
-    Args:
-        session (Session): SQLAlchemy session.
-        paraglider_key (str): The key of the paraglider.
-        minutes (int): The time window in minutes.
-
-    Returns:
-        float: The average speed in km/h.
-    """
-    time_threshold = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-    points = session.query(ParagliderData).filter(
-        ParagliderData.paraglider_key == paraglider_key,
-        ParagliderData.datetime >= time_threshold
-    ).order_by(ParagliderData.datetime).all()
+    time_threshold = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=minutes)
+    points = session.query(ParaglidersData).filter(
+        ParaglidersData.paraglider_key == paraglider_key,
+        ParaglidersData.datetime >= time_threshold
+    ).order_by(ParaglidersData.datetime).all()
 
     if len(points) < 2:
         return 0.0
@@ -137,8 +163,8 @@ def calculate_average_speed2(session: Session, paraglider_key, minutes=5):
         point1 = points[i - 1]
         point2 = points[i]
 
-        # Calculate the time difference in hours
-        time_diff = (point2.datetime - point1.datetime).total_seconds() / 3600.0
+        # Calculate the time difference in s
+        time_diff = (point2.datetime - point1.datetime).total_seconds()
 
         if time_diff > 0:
             total_time += time_diff
@@ -163,11 +189,11 @@ def purge_old_data(session: Session, hours=48):
         int: The number of records deleted.
     """
     # Calculate the time threshold
-    time_threshold = datetime.now(timezone.utc) - timedelta(hours=hours)
+    time_threshold = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
 
     # Delete records older than the threshold
-    deleted_count = session.query(ParagliderData).filter(
-        ParagliderData.datetime < time_threshold
+    deleted_count = session.query(ParaglidersData).filter(
+        ParaglidersData.datetime < time_threshold
     ).delete()
 
     # Commit the changes
