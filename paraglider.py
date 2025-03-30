@@ -1,10 +1,8 @@
-import json
 from blinker import signal
 from transitions import Machine
 from logger import get_logger
 import threading
-import random
-import time
+from datetime import datetime, timezone
 
 class Paraglider:
     states = [
@@ -18,12 +16,12 @@ class Paraglider:
         self.phone_number = cfg.get('phone_number')
         self.email = cfg.get('email')
 
-        self.last_datetime = None
-        self.coordinates = (0.0, 0.0)
-        self.course = 0.0
-        self.altitude_gnd_calc = 0.0
-        self.speed = 0.0
-        self.avg_speed = 0.0
+        self._last_datetime = None
+        self._coordinates = (0.0, 0.0)
+        self._course = 0.0
+        self._altitude_gnd_calc = 0.0
+        self._speed = 0.0
+        self._avg_speed = 0.0
 
         self._logger = get_logger(self.name)
         self._machine = Machine(model=self, states=Paraglider.states, initial='Initial', ignore_invalid_triggers=True)
@@ -74,20 +72,47 @@ class Paraglider:
     @property
     def is_flying(self):
         # speed > 10km/h ou 2,78m/s
-        if self.speed > 2.78:
+        if self._speed > 2.78:
             return True
         return False
 
-    def set_speed(self, speed):
-        self._logger.info(f"Speed: {speed}")
-        self.speed = speed
+    def update(self, last_state):
+        """
+        Update the paraglider's latest known values and adjust its state.
 
-        if self.speed > 16.67: # 60km/h ou 16,67m/s
+        Args:
+            last_state (dict): A dictionary containing the latest known data for the paraglider,
+                            including position, speed, altitude, etc.
+        """
+        # Update attributes with the latest known values
+        self._last_datetime = last_state.get('datetime', self._last_datetime)
+        self._coordinates = last_state.get('coordinates', self._coordinates)
+        self._course = last_state.get('course', self._course)
+        self._altitude_gnd_calc = last_state.get('altitude_gnd_calc', self._altitude_gnd_calc)
+        self._speed = last_state.get('speed', self._speed)
+        self._avg_speed = last_state.get('avg_speed', self._avg_speed)
+
+        self._logger.info(
+            f"Updated {self.name}: Coordinates={self._coordinates}, "
+            f"Course={self._course}, Alt Gnd={self._altitude_gnd_calc}, "
+            f"Speed={self._speed*3.6:.2f} km/h, Avg Speed={self._avg_speed*3.6:.2f} km/h"
+        )
+
+        # Adjust the state based on the updated values
+        if self._avg_speed > 16.67: # 60km/h or 16,67m/s
             self.highSpeed()
-        elif self.speed > 2.78: # 10km/h ou 2,78m/s
+        elif self._avg_speed > 2.78: # 10km/h or 2,78m/s
             self.flying()
-        elif self.speed < 0.56: # 2km/h ou 0,56m/s
+        elif (self._avg_speed < 0.56) and (self._altitude_gnd_calc < 60): # 2km/h or 0,56m/s
             self.nullSpeed()
+
+        time_difference = (datetime.now(timezone.utc) - self._last_datetime).total_seconds()
+        if time_difference > 300:  # 5 minutes
+            self._logger.warning(f"Disconnected for too long. Last seen at {self._last_datetime}.")
+            self.disconnected()
+        else:
+            self.connected()
+
 
     def arm_timer(self, duration):
         self.cancel_timer()

@@ -3,12 +3,17 @@ from logger import get_logger
 import threading
 import puretrack_api as ptrk
 import database as db
-from datetime import datetime, timezone
+from datetime import timezone
+from discord_bot import DiscordBot
 
 class GuardianAngel:
     def __init__(self, cfg):
         self.logger = get_logger("GuardianAngel")
         self._paragliders = []
+
+        self.discord_bot = DiscordBot(cfg.get('discord_bot'))
+        self.discord_bot.landing_confirmed.connect(self.on_landing_confirmed)
+        self.discord_bot.start_in_thread()
 
         database_cfg = cfg.get('database')
         db.init_db_engine(database_cfg.get('url'))
@@ -32,6 +37,8 @@ class GuardianAngel:
         # Connect signals
         paraglider.alert.connect(self.on_alert)
         paraglider.clearance.connect(self.on_clearance)
+
+        paraglider.landingConfirmed() # TODO - For test only
 
         self.logger.info(f"Paraglider {paraglider.name} added.")
 
@@ -65,6 +72,7 @@ class GuardianAngel:
     def update_states_from_tracking(self, duration):
         session = db.SessionLocal()
 
+        # Update database
         for paraglider in self._paragliders:
             paraglider_key = paraglider.puretrack_key
             if tails := ptrk.get_puretrack_tails(paraglider_key, duration+2): # +2 to ensure we get the last point
@@ -90,40 +98,29 @@ class GuardianAngel:
                     # Add the new points to the database
                     db.update_paraglider_data(session, paraglider_key, parsed_points)
 
+        # Update paragliders states
         # TODO - Check if the paraglider is in the database
         for paraglider in self._paragliders:
             # Update paraglider's speed, coordinates, and course
             # Retrieve the last known state of the paraglider from the database
             last_state = db.get_last_paraglider_state(session, paraglider.puretrack_key)
             if last_state:
-                self.logger.info(f"Last known state for {paraglider.puretrack_key}")
-
-                paraglider.last_datetime = last_state.datetime.replace(tzinfo=timezone.utc) # SQLite doesn't save Time Zone
-                # paraglider.speed = last_known_state.get('speed', last_known_state.get('speed_calc', 0))
-                paraglider.coordinates = (last_state.latitude, last_state.longitude)
-                paraglider.course = last_state.course
-                paraglider.altitude_gnd_calc = last_state.altitude_gnd_calc
-
-                # Calculate the average speed over the last 5 minutes
-                avg_speed = db.calculate_average_speed(session, paraglider.puretrack_key, minutes=5)
-                self.logger.info(f"Average speed for {paraglider.puretrack_key} over the last 5 minutes: {avg_speed*3.6} km/h")
-                paraglider.set_speed(avg_speed)
-
-                self.logger.info(f"Updated {paraglider.puretrack_key}: Coordinates={paraglider.coordinates}, Course={paraglider.course}, Alt Gnd={paraglider.altitude_gnd_calc}, Speed={paraglider.speed*3.6} km/h")
-
-                # Check if the last connection timestamp is too old
-                if paraglider.last_datetime is not None:
-                    time_difference = (datetime.now(timezone.utc) - paraglider.last_datetime).total_seconds()
-                    if time_difference > 300:  # 5 minutes
-                        self.logger.warning(f"Paraglider {paraglider.puretrack_key} has been disconnected for too long. Last seen at {paraglider.last_datetime}.")
-                        paraglider.disconnected()
-                    else:
-                        paraglider.connected()
+                paraglider.update({
+                    'datetime': last_state.datetime.replace(tzinfo=timezone.utc), # SQLite doesn't save Time Zone
+                    'coordinates': (last_state.latitude, last_state.longitude),
+                    'course': last_state.course,
+                    'altitude_gnd_calc': last_state.altitude_gnd_calc,
+                    # paraglider.speed = last_state.get('speed', last_known_state.get('speed_calc', 0))
+                    'speed': last_state.speed,
+                    'avg_speed': db.calculate_average_speed(session, paraglider.puretrack_key, minutes=5) # Calculate the average speed over the last 5 minutes
+                })
+            else:
+                pass # TODO - See later if something is needed
 
             # Log the state of each paraglider
-            self.logger.info(f"Paraglider {paraglider.puretrack_key} state: {paraglider.state}")
+            self.logger.info(f"Paraglider {paraglider.name} / {paraglider.puretrack_key} state: {paraglider.state}")
 
-        # Purge old points
+        # Purge the database of old points
         db.purge_old_data(session)
 
         session.close()
@@ -146,8 +143,12 @@ class GuardianAngel:
 
     def on_clearance(self, sender, message):
         self.logger.info(f"Clearance signal received from {sender.name}")
-        # TODO
+        # TODO - Threads
         # Sends a message to the paraglider to confirm the landing
-        #  Save the message id to check the response later
+        self.discord_bot.post_waiting_landing_confirmation(sender.discord_id)
         # Waits for the paraglider's response
         #  If the paraglider confirms the landing, call paraglider.landingConfirmed()
+
+    def on_landing_confirmed(self, sender, message):
+        self.logger.info(f"Landing confirmed received from {sender.name}")
+        # TODO - paraglider.landingConfirmed()

@@ -16,6 +16,6 @@ class Config:
 
     def get(self, key, default=None):
         return self._data.get(key, default)
-    
+
 # Create a config instance
-config = Config()
+#config = Config()
