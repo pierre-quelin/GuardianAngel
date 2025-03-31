@@ -26,8 +26,9 @@ class DiscordBot:
         intents.reactions = True
         self.bot = commands.Bot(command_prefix='>', intents=intents)
 
-        self.msg_connected = "I'm connected. 🤓\nStay safe."
-        self.msg_landed = "🕵I've detected your landing 🏁. Is everything ok ❓" # 🦺⚠❓🏁
+        self.msg_hello = "I'm connected. 🤓\nStay safe."
+        self.msg_good_bye = "I'll be back soon... 🤓\nStay safe."
+        self.msg_waiting_landing_confirmation = "🕵I've detected your landing 🏁. Is everything ok ❓" # 🦺⚠❓🏁
         self.msg_bye = "👍 Good luck, I wish you all the best. See you later 😉"
         self.msg_not_addressed = "👮 This message was not addressed to you! Thank you."
 
@@ -41,14 +42,14 @@ class DiscordBot:
         # Stores messages awaiting reply
         self.landing_to_be_confirmed = {}
 
-        self.landing_confirmed = signal('landing_confirmed')
+        self.landing_confirmed = signal('landing_confirmed by TODO')
 
     def _register_events(self):
         """Register bot events."""
         @self.bot.event
         async def on_ready():
+            # TODO - for test - await self.post_message_to_channel(self.channel_id, self.msg_hello)
             self.logger.info(f"Discord bot connected as '{self.bot.user}'")
-            await self.post_message_to_channel(self.channel_id, self.msg_connected)
 
         @self.bot.event
         async def on_message(message):
@@ -127,13 +128,16 @@ class DiscordBot:
         return None
 
     async def post_waiting_landing_confirmation(self, discord_id):
-        msg_id = await self.post_message_to_channel(self.channel_id, f"<@{discord_id}> " + self.msg_landed)
+        self.logger.info(f"post_waiting_landing_confirmation discord_id {discord_id}")
+        msg_id = await self.post_message_to_channel(self.channel_id, f"<@{discord_id}> " + self.msg_waiting_landing_confirmation)
         self.landing_to_be_confirmed[msg_id] = discord_id
 
     async def post_bye(self, discord_id):
+        self.logger.info(f"post_bye discord_id {discord_id}")
         await self.post_message_to_channel(self.channel_id, f"<@{discord_id}> " + self.msg_bye)
 
     async def post_not_addressed(self, discord_id):
+        self.logger.info(f"post_not_addressed discord_id {discord_id}")
         await self.post_message_to_channel(self.channel_id, f"<@{discord_id}> " + self.msg_not_addressed)
 
     def run(self):

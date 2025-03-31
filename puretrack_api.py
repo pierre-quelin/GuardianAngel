@@ -179,8 +179,9 @@ key_mapping = {
     'p': {'name': 'phone', 'type': str},                # User's phone number
     'F': {'name': 'ffvl_key', 'type': str},             # If the target has an FFVL key
     '!': {'name': 'random', 'type': str},               # If the item is a randomly generated ID from FLARM
-    'W': {'name': 'W_unknown', 'type': str},            # ?
+    'W': {'name': 'W_unknown', 'type': str},            # ? altitude ?
     'o': {'name': 'o_unknown', 'type': str},            # ?
+    'X': {'name': 'X_unknown', 'type': str},            # ?
 }
 
 # 'U': 'source_type_id', ID of source of this point

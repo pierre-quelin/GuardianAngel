@@ -5,6 +5,7 @@ import puretrack_api as ptrk
 import database as db
 from datetime import timezone
 from discord_bot import DiscordBot
+import asyncio
 
 class GuardianAngel:
     def __init__(self, cfg):
@@ -142,10 +143,10 @@ class GuardianAngel:
         # Sends a message to inform the paraglider about the alert
 
     def on_clearance(self, sender, message):
-        self.logger.info(f"Clearance signal received from {sender.name}")
+        self.logger.info(f"Clearance signal received from {sender.name} : discord_id {sender.discord_id}")
         # TODO - Threads
         # Sends a message to the paraglider to confirm the landing
-        self.discord_bot.post_waiting_landing_confirmation(sender.discord_id)
+        asyncio.create_task(self.discord_bot.post_waiting_landing_confirmation(sender.discord_id))
         # Waits for the paraglider's response
         #  If the paraglider confirms the landing, call paraglider.landingConfirmed()
 

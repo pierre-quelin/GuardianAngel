@@ -49,6 +49,7 @@ class Paraglider:
 
     def on_enter_Unknown(self):
         self._logger.info(f"Entry action for Unknown state for {self.name}")
+        self.clearance.send(self, message="clearance!") # TODO - for test
         self.check()
 
     def on_enter_Clearance(self):
@@ -94,7 +95,7 @@ class Paraglider:
 
         self._logger.info(
             f"Updated {self.name}: Coordinates={self._coordinates}, "
-            f"Course={self._course}, Alt Gnd={self._altitude_gnd_calc}, "
+            f"Course={self._course} °, Alt Gnd={self._altitude_gnd_calc} m, "
             f"Speed={self._speed*3.6:.2f} km/h, Avg Speed={self._avg_speed*3.6:.2f} km/h"
         )
 
