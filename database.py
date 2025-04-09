@@ -21,15 +21,15 @@ class ParaglidersData(Base):
     altitude_gnd_calc = Column(Float)
     state = Column(String)
 
-def init_db_engine(database_url):
+def init_db_engine(cfg):
     """
     Initialize the database engine and session.
 
     Args:
-        database_url (str): The database URL.
+        cfg (dict): Configuration for the db engine
     """
     global SessionLocal
-    engine = create_engine(database_url)
+    engine = create_engine(cfg.get('url'))
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
     # Crée les tables si elles n'existent pas

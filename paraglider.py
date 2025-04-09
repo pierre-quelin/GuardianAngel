@@ -49,12 +49,12 @@ class Paraglider:
 
     def on_enter_Unknown(self):
         self._logger.info(f"Entry action for Unknown state for {self.name}")
-        self.clearance.send(self, message="clearance!") # TODO - for test
         self.check()
 
     def on_enter_Clearance(self):
         self._logger.info(f"Entry action for Clearance state for {self.name}")
         self.clearance.send(self, message="clearance!")
+        self.landingConfirmed() # TODO - for test only
         self.arm_timer(300) # Arm a timer for 5 minutes
 
     def on_exit_Clearance(self):

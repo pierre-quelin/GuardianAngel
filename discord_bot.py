@@ -18,7 +18,7 @@ class DiscordBot:
         # Extract configuration
         self.bot_token = cfg.get('bot_token')
         self.channel_id = cfg.get('channel_id')
-        self.puretrack_grp = cfg.get('puretrack_group')
+        # self.puretrack_grp = cfg.get('puretrack_group')
 
         # Initialize the bot
         intents = discord.Intents.default()
@@ -28,7 +28,7 @@ class DiscordBot:
 
         self.msg_hello = "I'm connected. 🤓\nStay safe."
         self.msg_good_bye = "I'll be back soon... 🤓\nStay safe."
-        self.msg_waiting_landing_confirmation = "🕵I've detected your landing 🏁. Is everything ok ❓" # 🦺⚠❓🏁
+        self.msg_waiting_landing_confirmation = "🕵I've detected your landing 🏁. Is everything ok ❓" # 🦺⚠❓🏁👀
         self.msg_bye = "👍 Good luck, I wish you all the best. See you later 😉"
         self.msg_not_addressed = "👮 This message was not addressed to you! Thank you."
 

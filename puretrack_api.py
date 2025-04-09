@@ -326,7 +326,8 @@ def get_puretrack_group_live(group):
         requests.exceptions.RequestException: If the HTTP request fails.
     """
     # Step 1: Obtain the CSRF token
-    url_get_token = 'https://puretrack.io/?l=44.68131,4.62335&z=15&group={group}'
+    # url_get_token = 'https://puretrack.io/?l=44.68131,4.62335&z=15&group={group}'
+    url_get_token = 'https://puretrack.io/g/{group}'
     try:
         response = requests.get(url_get_token)
         response.raise_for_status()
@@ -366,7 +367,7 @@ def get_puretrack_group_live(group):
             response_post.raise_for_status()
 
             if response_post.status_code == 200:
-                logger.debug(f"Response from getPureTrackGroupLive API: {response.json().get('data')}")
+                logger.debug(f"Response from getPureTrackGroupLive API: {response_post.json().get('data')}")
                 return response_post.json().get('data')
             else:
                 logger.error(f"Data recovery error")

@@ -6,27 +6,50 @@ import database as db
 from datetime import timezone
 from discord_bot import DiscordBot
 import asyncio
+from discord_api import DiscordApi
+import json
 
 class GuardianAngel:
     def __init__(self, cfg):
         self.logger = get_logger("GuardianAngel")
         self._paragliders = []
 
-        self.discord_bot = DiscordBot(cfg.get('discord_bot'))
-        self.discord_bot.landing_confirmed.connect(self.on_landing_confirmed)
-        self.discord_bot.start_in_thread()
+        # self.discord_bot = DiscordBot(cfg.get('discord_bot'))
+        # self.discord_bot.landing_confirmed.connect(self.on_landing_confirmed)
+        # self.discord_bot.start_in_thread()
+        self.discord_bot = DiscordApi(cfg.get('discord_bot'))
 
-        database_cfg = cfg.get('database')
-        db.init_db_engine(database_cfg.get('url'))
+        self.puretrack_site_cfg = cfg.get('puretrack_site')
+        self.puretrack_grp = self.puretrack_site_cfg.get('group')
+
+        db.init_db_engine(cfg.get('database'))
+
+        # Get the list of all paragliders in the group
+        # config = []
+        # grp = ptrk.get_puretrack_group(cfg['puretrack_site']['group'])
+        # for paraglider in grp.get('members'):
+        #     p = {}
+        #     p["name"] = paraglider.get('label')
+        #     p["puretrack_key"] = paraglider.get('key')
+        #     p["discord_id"] = 0
+        #     p["phone_number"] = "+33700000000"
+        #     p["email"] = ""
+        #     config.append(p)
+        # with open('group.json', 'w') as f:
+        #     json.dump(config, f, indent=4)
+
+        # grpLive = ptrk.get_puretrack_group_live(cfg['puretrack_site']['group'])
+        # for paraglider in grpLive:
+        #     elt = ptrk.parse_puretrack_record(paraglider)
+        #     self.logger.info(f"{elt.get('key')} : {elt.get('name')} : {elt.get('label')}")
+        # ??? strange response
+
+        # Check that all the paragliders in the group are known. If not,...
 
         # Add all known paragliders
         # TODO - Restore previous states
         for paraglider_cfg in cfg.get('paragliders'):
             self.add_paraglider(paraglider_cfg)
-
-        # Get the list of all paragliders in the group
-        # grpLive = ptrk.getPureTrackGroupLive(cfg['puretrack']['group'])
-        # Check that all the paragliders in the group are known. If not,...
 
         self._timer = None
         self.start_monitoring()
@@ -39,21 +62,23 @@ class GuardianAngel:
         paraglider.alert.connect(self.on_alert)
         paraglider.clearance.connect(self.on_clearance)
 
-        paraglider.landingConfirmed() # TODO - For test only
-
         self.logger.info(f"Paraglider {paraglider.name} added.")
 
-    # def remove_paraglider(self, name):
-    #     if name in self._paragliders:
-    #         del self._paragliders[name]
-    #         self.logger.info(f"Paraglider {name} removed.")
-    #     else:
-    #         self.logger.info(f"Paraglider {name} does not exist.")
+    def remove_paraglider(self, name):
+        if name in self._paragliders:
+            # Disconnect signals
+            self._paragliders[name].alert.disconnect(self.on_alert)
+            self._paragliders[name].clearance.disconnect(self.on_clearance)
+
+            del self._paragliders[name]
+            self.logger.info(f"Paraglider {name} removed.")
+        else:
+            self.logger.info(f"Paraglider {name} does not exist.")
 
     def get_paraglider(self, name):
         return self._paragliders.get(name, None)
 
-    def start_monitoring(self, period=15):
+    def start_monitoring(self, period=30):
         self.stop_monitoring()
         self._timer = threading.Timer(period, self._update_states, args=(period,))
         self._timer.start()
@@ -146,9 +171,11 @@ class GuardianAngel:
         self.logger.info(f"Clearance signal received from {sender.name} : discord_id {sender.discord_id}")
         # TODO - Threads
         # Sends a message to the paraglider to confirm the landing
-        asyncio.create_task(self.discord_bot.post_waiting_landing_confirmation(sender.discord_id))
+        # asyncio.create_task(self.discord_bot.post_waiting_landing_confirmation(sender.discord_id))
         # Waits for the paraglider's response
         #  If the paraglider confirms the landing, call paraglider.landingConfirmed()
+        message = f"[{sender.name}](https://puretrack.io/?l=44.91038,5.19237&z=15&group={self.puretrack_grp}&k={sender.puretrack_key}) - 🕵I've detected your landing 🏁. Is everything ok ❓"
+        self.discord_bot.send_message(message)
 
     def on_landing_confirmed(self, sender, message):
         self.logger.info(f"Landing confirmed received from {sender.name}")
