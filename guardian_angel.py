@@ -1,3 +1,4 @@
+from datetime import datetime
 from paraglider import Paraglider
 from logger import get_logger
 import threading
@@ -174,7 +175,8 @@ class GuardianAngel:
         # asyncio.create_task(self.discord_bot.post_waiting_landing_confirmation(sender.discord_id))
         # Waits for the paraglider's response
         #  If the paraglider confirms the landing, call paraglider.landingConfirmed()
-        message = f"[{sender.name}](https://puretrack.io/?l=44.91038,5.19237&z=15&group={self.puretrack_grp}&k={sender.puretrack_key}) - 🕵I've detected your landing 🏁. Is everything ok ❓"
+        hour= datetime.now().strftime("%H:%M:%S")
+        message = f"[{sender.name}](https://puretrack.io/?l=44.91038,5.19237&z=15&group={self.puretrack_grp}&k={sender.puretrack_key}) - 🕵I've detected your landing at {hour} 🏁. Is everything ok ❓"
         self.discord_bot.send_message(message)
 
     def on_landing_confirmed(self, sender, message):

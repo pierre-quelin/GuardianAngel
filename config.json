@@ -1,7 +1,7 @@
 {
     "logging": {
         "level": "INFO",
-        "file": "application.log",
+        "file": "log/application.log",
         "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     },
     "guardian_angel": {
@@ -9,14 +9,14 @@
             {
                 "name": "me",
                 "puretrack_key": "my-key",
-                "discord_user_id": 0,
+                "discord_id": 0,
                 "phone_number": "+33700000000",
                 "email": ""
             },
             {
                 "name": "another",
                 "puretrack_key": "another-key",
-                "discord_user_id": 0,
+                "discord_id": 0,
                 "phone_number": "+33700000000",
                 "email": ""
             }
@@ -28,9 +28,9 @@
             "dev_site": "https://discord.com/developers/applications",
             "bot_token":"ZZZZZZZZZZZZZZZZZZZZZZZZZZ.ZZZZZZ.ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
             "channel_id": 0
+        },
+        "database": {
+            "url": "sqlite:///data/paragliders.db"
         }
-    },
-    "database": {
-        "url": "sqlite:///paragliders.db"
     }
 }

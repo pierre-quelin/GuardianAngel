@@ -147,3 +147,32 @@ state Root {
 
 @enduml
 ```
+
+# Run inside a Docker container
+
+Building the image :
+``` sh
+docker build -t guardian-angel .
+```
+
+Export the Docker image :
+``` sh
+docker save -o guardian-angel.tar guardian-angel
+```
+
+Running the container with specific config.json :
+``` sh
+docker run --rm -it --restart=always \
+    -v $(pwd)/config.json:/usr/src/app/config.json \
+    -v $(pwd)/log:/usr/src/app/log \
+    -v $(pwd)/data:/usr/src/app/data \
+    guardian-angel
+
+```
+
+Running the container with volumes (for development) :
+``` sh
+docker run --rm -it --restart=always \
+    -v $(pwd):/usr/src/app \
+    guardian-angel
+```
