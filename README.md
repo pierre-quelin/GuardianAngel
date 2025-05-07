@@ -148,7 +148,7 @@ state Root {
 @enduml
 ```
 
-# Run inside a Docker container
+# Running inside a Docker container
 
 Building the image :
 ``` sh
@@ -163,8 +163,8 @@ docker save -o guardian-angel.tar guardian-angel
 Running the container with specific config.json :
 ``` sh
 docker run --rm -it --restart=always \
-    -v $(pwd)/config.json:/usr/src/app/config.json \
-    -v $(pwd)/log:/usr/src/app/log \
+    -v $(pwd)/cfg/config.json:/usr/src/app/cfg/config.json \
+    -v $(pwd)/logs:/usr/src/app/logs \
     -v $(pwd)/data:/usr/src/app/data \
     guardian-angel
 

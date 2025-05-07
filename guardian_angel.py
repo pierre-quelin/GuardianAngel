@@ -5,7 +5,6 @@ import threading
 import puretrack_api as ptrk
 import database as db
 from datetime import timezone
-from discord_bot import DiscordBot
 import asyncio
 from discord_api import DiscordApi
 import json
@@ -18,7 +17,8 @@ class GuardianAngel:
         # self.discord_bot = DiscordBot(cfg.get('discord_bot'))
         # self.discord_bot.landing_confirmed.connect(self.on_landing_confirmed)
         # self.discord_bot.start_in_thread()
-        self.discord_bot = DiscordApi(cfg.get('discord_bot'))
+
+        # self.discord_bot = DiscordApi(cfg.get('discord_bot'))
 
         self.puretrack_site_cfg = cfg.get('puretrack_site')
         self.puretrack_grp = self.puretrack_site_cfg.get('group')
@@ -26,18 +26,18 @@ class GuardianAngel:
         db.init_db_engine(cfg.get('database'))
 
         # Get the list of all paragliders in the group
-        # config = []
-        # grp = ptrk.get_puretrack_group(cfg['puretrack_site']['group'])
-        # for paraglider in grp.get('members'):
-        #     p = {}
-        #     p["name"] = paraglider.get('label')
-        #     p["puretrack_key"] = paraglider.get('key')
-        #     p["discord_id"] = 0
-        #     p["phone_number"] = "+33700000000"
-        #     p["email"] = ""
-        #     config.append(p)
-        # with open('group.json', 'w') as f:
-        #     json.dump(config, f, indent=4)
+        config = []
+        grp = ptrk.get_puretrack_group(cfg['puretrack_site']['group'])
+        for paraglider in grp.get('members'):
+            p = {}
+            p["name"] = paraglider.get('label')
+            p["puretrack_key"] = paraglider.get('key')
+            p["discord_id"] = 0
+            p["phone_number"] = "+33700000000"
+            p["email"] = ""
+            config.append(p)
+        with open('group.json', 'w') as f:
+            json.dump(config, f, indent=4)
 
         # grpLive = ptrk.get_puretrack_group_live(cfg['puretrack_site']['group'])
         # for paraglider in grpLive:
