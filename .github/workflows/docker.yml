@@ -22,8 +22,8 @@ jobs:
     - name: Build Docker image
       run: docker build -t guardian-angel:latest .
 
-    - name: Save Docker image as tar
-      run: docker save -o guardian-angel.tar guardian-angel:latest
+    - name: Save Docker image as tar.gz
+      run: docker save guardian-angel:latest | gzip -9 > guardian-angel.tar.gz
 
     - name: Upload Docker image as artifact
       uses: actions/upload-artifact@v4
