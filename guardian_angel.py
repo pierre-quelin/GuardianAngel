@@ -20,8 +20,21 @@ class GuardianAngel:
 
         # self.discord_bot = DiscordApi(cfg.get('discord_bot'))
 
+        self._event_queue = asyncio.Queue()
+        self._stop_monitoring = asyncio.Event()
+        self._event_task = None
+        self.discord_bot = None
+        self._discord_task = None
+        self._replay = EventReplay()
+        self._confirmation_task = None
+        self._timer = None
+        self._monitor_task = None
+        self._last_seen_state = {}
         self.puretrack_site_cfg = cfg.get('puretrack_site')
-        self.puretrack_grp = self.puretrack_site_cfg.get('group')
+        self.discord_bot_cfg = cfg.get('discord_bot') or (
+            self.puretrack_site_cfg.get('discord_bot', {}) if self.puretrack_site_cfg else {}
+        )
+        self.puretrack_grp = self.puretrack_site_cfg.get('group') if self.puretrack_site_cfg else None
 
         db.init_db_engine(cfg.get('database'))
 
@@ -52,39 +65,51 @@ class GuardianAngel:
         for paraglider_cfg in cfg.get('paragliders'):
             self.add_paraglider(paraglider_cfg)
 
-        self._timer = None
-        self._monitor_task = None
-        self._stop_monitoring = asyncio.Event()
-        self._event_queue = asyncio.Queue()
-        self._event_task = None
-        self.discord_bot = None
-        self._discord_task = None
-        self._replay = EventReplay()
-        self._confirmation_task = None
 
     def add_paraglider(self, cfg):
-        paraglider = Paraglider(cfg)
+        paraglider = Paraglider(cfg, emit_signals=False, initialize=False)
         self._paragliders.append(paraglider)
 
         # Connect signals
-        paraglider.alert.connect(self.on_alert)
-        paraglider.clearance.connect(self.on_clearance)
+        paraglider.alert.connect(self.on_alert, weak=False)
+        paraglider.clearance.connect(self.on_clearance, weak=False)
+        paraglider.initialize()
+        paraglider.enable_signals()
 
         self.logger.info(f"Paraglider {paraglider.name} added.")
 
     def remove_paraglider(self, name):
-        if name in self._paragliders:
-            # Disconnect signals
-            self._paragliders[name].alert.disconnect(self.on_alert)
-            self._paragliders[name].clearance.disconnect(self.on_clearance)
+        for index, paraglider in enumerate(self._paragliders):
+            if paraglider.name == name:
+                # Disconnect signals
+                paraglider.alert.disconnect(self.on_alert)
+                paraglider.clearance.disconnect(self.on_clearance)
+                paraglider.cleanup()
 
-            del self._paragliders[name]
-            self.logger.info(f"Paraglider {name} removed.")
-        else:
-            self.logger.info(f"Paraglider {name} does not exist.")
+                del self._paragliders[index]
+                self.logger.info(f"Paraglider {name} removed.")
+                return True
+
+        self.logger.info(f"Paraglider {name} does not exist.")
+        return False
 
     def get_paraglider(self, name):
-        return self._paragliders.get(name, None)
+        for paraglider in self._paragliders:
+            if paraglider.name == name:
+                return paraglider
+        return None
+
+    async def cleanup(self):
+        await self.stop_monitoring()
+        for paraglider in list(self._paragliders):
+            self.remove_paraglider(paraglider.name)
+        self._last_seen_state.clear()
+        if self.discord_bot is not None:
+            try:
+                await self.discord_bot.close()
+            except Exception as exc:
+                self.logger.exception("Failed to close Discord bot cleanly: %s", exc)
+            self.discord_bot = None
 
     async def start_monitoring(self, period=30):
         self._stop_monitoring.clear()
@@ -92,8 +117,9 @@ class GuardianAngel:
             self._monitor_task.cancel()
         if self._event_task is None:
             self._event_task = asyncio.create_task(self._process_events())
-        if self.discord_bot is None and self.puretrack_site_cfg is not None:
-            self.discord_bot = DiscordBot(self.puretrack_site_cfg.get('discord_bot', {}))
+        if self.discord_bot is None and self.discord_bot_cfg is not None:
+            self.logger.info("Starting Discord bot with channel_id=%s", self.discord_bot_cfg.get('channel_id'))
+            self.discord_bot = DiscordBot(self.discord_bot_cfg)
             self._discord_task = asyncio.create_task(self.discord_bot.start_async())
             self._confirmation_task = asyncio.create_task(self._handle_confirmation_events())
         self._monitor_task = asyncio.create_task(self._monitor_loop(period))
@@ -129,6 +155,13 @@ class GuardianAngel:
             except asyncio.CancelledError:
                 pass
             self._confirmation_task = None
+        if self._discord_task is not None:
+            self._discord_task.cancel()
+            try:
+                await self._discord_task
+            except asyncio.CancelledError:
+                pass
+            self._discord_task = None
 
     async def _handle_confirmation_events(self):
         while not self._stop_monitoring.is_set():
@@ -159,12 +192,20 @@ class GuardianAngel:
                 self.logger.info("Processing alert event for %s", payload.get('name'))
                 self._replay.record({'type': event_type, 'payload': payload})
                 if self.discord_bot is not None:
-                    await self.discord_bot.send_message_async(f"Alert for {payload.get('name')}")
+                    self.logger.info("Dispatching alert event for %s", payload.get('name'))
+                    try:
+                        await self.discord_bot.send_message_async(f"Alert for {payload.get('name')}")
+                    except Exception as exc:
+                        self.logger.exception("Failed to send alert Discord message: %s", exc)
             elif event_type == 'clearance':
                 self.logger.info("Processing clearance event for %s", payload.get('name'))
                 self._replay.record({'type': event_type, 'payload': payload})
                 if self.discord_bot is not None:
-                    await self.discord_bot.send_message_async(f"Clearance for {payload.get('name')}")
+                    self.logger.info("Dispatching clearance event for %s", payload.get('name'))
+                    try:
+                        await self.discord_bot.send_message_async(f"Clearance for {payload.get('name')}")
+                    except Exception as exc:
+                        self.logger.exception("Failed to send clearance Discord message: %s", exc)
 
             self._event_queue.task_done()
 
@@ -218,15 +259,25 @@ class GuardianAngel:
 
             # Log the state of each paraglider
             self.logger.info(f"Paraglider {paraglider.name} / {paraglider.puretrack_key} state: {paraglider.state}")
-
-            if paraglider.state in {'Alert', 'Clearance'}:
-                event_type = 'alert' if paraglider.state == 'Alert' else 'clearance'
-                await self._event_queue.put({'type': event_type, 'payload': {'name': paraglider.name}})
+            self._queue_state_event_if_changed(paraglider)
 
         # Purge the database of old points
         db.purge_old_data(session)
 
         session.close()
+
+    def _queue_state_event_if_changed(self, paraglider):
+        state_key = paraglider.state
+        previous_state = self._last_seen_state.get(paraglider.puretrack_key)
+        if previous_state == state_key:
+            return False
+
+        self._last_seen_state[paraglider.puretrack_key] = state_key
+        if state_key in {'Alert', 'Clearance'}:
+            event_type = 'alert' if state_key == 'Alert' else 'clearance'
+            self._enqueue_event({'type': event_type, 'payload': {'name': paraglider.name}})
+            return True
+        return False
 
     def update_state_from_discord(self, name, message):
         paraglider = self.get_paraglider(name)
@@ -234,9 +285,26 @@ class GuardianAngel:
             if message == "landed":
                 paraglider.landingConfirmed()
 
+    def _enqueue_event(self, event):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            try:
+                loop.create_task(self._event_queue.put(event))
+            except RuntimeError:
+                self._event_queue.put_nowait(event)
+        else:
+            try:
+                self._event_queue.put_nowait(event)
+            except RuntimeError:
+                pass
+
     def on_alert(self, sender, message):
         self.logger.info(f"Alert signal received from {sender.name}")
-        asyncio.create_task(self._event_queue.put({'type': 'alert', 'payload': {'name': sender.name}}))
+        self._queue_state_event_if_changed(sender)
         # TODO - If several alerts are sent, how do you manage the message ids?
         # Sends a message to the guardian angel to check the paraglider
         #  Save the message id to check the response later
@@ -247,7 +315,7 @@ class GuardianAngel:
 
     def on_clearance(self, sender, message):
         self.logger.info(f"Clearance signal received from {sender.name} : discord_id {sender.discord_id}")
-        asyncio.create_task(self._event_queue.put({'type': 'clearance', 'payload': {'name': sender.name}}))
+        self._queue_state_event_if_changed(sender)
         # TODO - Threads
         # Sends a message to the paraglider to confirm the landing
         # asyncio.create_task(self.discord_bot.post_waiting_landing_confirmation(sender.discord_id))

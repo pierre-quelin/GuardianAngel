@@ -121,7 +121,12 @@ class DiscordBot(commands.Bot):
         if self.channel_id is None:
             self.logger.warning("No channel configured for Discord bot")
             return None
-        return await self.post_message_to_channel(self.channel_id, message)
+        self.logger.info("Attempting to post Discord message to channel %s: %s", self.channel_id, message)
+        try:
+            return await self.post_message_to_channel(self.channel_id, message)
+        except Exception as exc:
+            self.logger.exception("Discord send failed: %s", exc)
+            return None
 
 
 
@@ -142,8 +147,8 @@ class DiscordBot(commands.Bot):
         await self.post_message_to_channel(self.channel_id, f"<@{discord_id}> " + self.msg_not_addressed)
 
     async def setup_hook(self) -> None:
-        self.add_command(self.echo)
-        self.add_command(self.check)
+        self.add_command(echo)
+        self.add_command(check)
         # create the background task and run it in the background
         # self._task = self.loop.create_task(self.my_background_task())
         pass

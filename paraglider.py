@@ -9,7 +9,7 @@ class Paraglider:
         'Initial', 'Unknown', 'Flying', 'Clearance', 'Landed', 'Disconnected', 'Alert'
     ]
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, emit_signals=True, initialize=True):
         self.name = cfg.get('name')
         self.puretrack_key = cfg.get('puretrack_key')
         self.discord_id = cfg.get('discord_id')
@@ -24,7 +24,16 @@ class Paraglider:
         self._avg_speed = 0.0
 
         self._logger = get_logger(self.name)
-        self._machine = Machine(model=self, states=Paraglider.states, initial='Initial', ignore_invalid_triggers=True)
+        self._emit_signals = False
+        self._initialization_completed = False
+        self._defer_initialization = not emit_signals
+        self._machine = Machine(
+            model=self,
+            states=Paraglider.states,
+            initial='Initial',
+            ignore_invalid_triggers=True,
+            on_exception='ignore',
+        )
         self._timer = None
         self.alert = signal('alert')
         self.clearance = signal('clearance')
@@ -44,7 +53,21 @@ class Paraglider:
         self._machine.add_transition(trigger='check', source='Unknown', dest='Flying', conditions='is_flying')
         self._machine.add_transition(trigger='check', source='Unknown', dest='Clearance', unless='is_flying')
 
-        self.init() # on_enter_Unknown called
+        if initialize:
+            self.initialize()
+
+    def initialize(self):
+        if self._defer_initialization and not self._initialization_completed:
+            self._initialization_completed = False
+            return
+
+        self._run_initialization()
+
+    def _run_initialization(self):
+        if self._initialization_completed:
+            return
+        self.init()
+        self._initialization_completed = True
         self._logger.info(f"Paraglider {self.name} created. State: {self.state}")
 
     def on_enter_Unknown(self):
@@ -53,8 +76,9 @@ class Paraglider:
 
     def on_enter_Clearance(self):
         self._logger.info(f"Entry action for Clearance state for {self.name}")
-        self.clearance.send(self, message="clearance!")
-        self.arm_timer(300) # Arm a timer for 5 minutes
+        if self._emit_signals:
+            self.clearance.send(self, message="clearance!")
+            self.arm_timer(300) # Arm a timer for 5 minutes
 
     def on_exit_Clearance(self):
         self._logger.info(f"Exit action for Clearance state for {self.name}")
@@ -62,8 +86,9 @@ class Paraglider:
 
     def on_enter_Alert(self):
         self._logger.warning(f"Entry action for Alert state for {self.name}")
-        self.alert.send(self, message="alert!")
-        self.arm_timer(300) # Arm a timer for 5 minutes
+        if self._emit_signals:
+            self.alert.send(self, message="alert!")
+            self.arm_timer(300) # Arm a timer for 5 minutes
 
     def on_exit_Alert(self):
         self._logger.warning(f"Exit action for Alert state for {self.name}")
@@ -127,6 +152,17 @@ class Paraglider:
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
+
+    def enable_signals(self):
+        if not self._initialization_completed:
+            self._run_initialization()
+        self._emit_signals = True
+        if self.state == 'Clearance':
+            self.clearance.send(self, message='clearance!')
+            self.arm_timer(300)
+        elif self.state == 'Alert':
+            self.alert.send(self, message='alert!')
+            self.arm_timer(300)
 
     def cleanup(self):
         self.cancel_timer()

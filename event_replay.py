@@ -18,8 +18,12 @@ class EventReplay:
             'timestamp': datetime.utcnow().isoformat(),
             'event': event,
         }
-        with open(self.storage_path, 'r', encoding='utf-8') as handle:
-            data = json.load(handle)
+        self._ensure_storage()
+        if os.path.exists(self.storage_path):
+            with open(self.storage_path, 'r', encoding='utf-8') as handle:
+                data = json.load(handle)
+        else:
+            data = []
         data.append(payload)
         with open(self.storage_path, 'w', encoding='utf-8') as handle:
             json.dump(data, handle, indent=2)
