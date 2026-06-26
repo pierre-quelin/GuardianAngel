@@ -9,7 +9,7 @@ with open('cfg/config.json', 'r') as config_file:
 
 # Extract logging parameters
 log_level = logging_config.get('level', 'INFO').upper()
-log_file = logging_config.get('file', 'log/application.log')
+log_file = logging_config.get('file', 'logs/application.log')
 log_format = logging_config.get('format', '%(asctime)s - %(levelname)s - %(message)s')
 log_max_size = logging_config.get('max_size', 5 * 1024 * 1024)  # Default: 5 MB
 log_backup_count = logging_config.get('backup_count', 0)  # Default: No backups

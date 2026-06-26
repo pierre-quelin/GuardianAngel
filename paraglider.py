@@ -54,7 +54,6 @@ class Paraglider:
     def on_enter_Clearance(self):
         self._logger.info(f"Entry action for Clearance state for {self.name}")
         self.clearance.send(self, message="clearance!")
-        self.landingConfirmed() # TODO - for test only
         self.arm_timer(300) # Arm a timer for 5 minutes
 
     def on_exit_Clearance(self):
@@ -107,6 +106,10 @@ class Paraglider:
         elif (self._avg_speed < 0.56) and (self._altitude_gnd_calc < 60): # 2km/h or 0,56m/s
             self.nullSpeed()
 
+        if self._last_datetime is None:
+            self._logger.warning(f"No timestamp available yet for {self.name}; skipping disconnect check.")
+            return
+
         time_difference = (datetime.now(timezone.utc) - self._last_datetime).total_seconds()
         if time_difference > 300:  # 5 minutes
             self._logger.warning(f"Disconnected for too long. Last seen at {self._last_datetime}.")
@@ -124,3 +127,6 @@ class Paraglider:
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
+
+    def cleanup(self):
+        self.cancel_timer()

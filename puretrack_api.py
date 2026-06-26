@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import math
 from logger import get_logger
@@ -312,6 +313,11 @@ def get_puretrack_group(group):
 
     return None
 
+async def get_puretrack_group_async(group):
+    """Async wrapper around the blocking PureTrack group fetch."""
+    return await asyncio.to_thread(get_puretrack_group, group)
+
+
 def get_puretrack_group_live(group):
     """
     Fetches live data for a PureTrack group.
@@ -420,3 +426,7 @@ def get_puretrack_tails(key, limit=10):
         logger.error("Data recovery error :", e)
 
     return None
+
+async def get_puretrack_tails_async(key, limit=10):
+    """Async wrapper around the blocking PureTrack trail fetch."""
+    return await asyncio.to_thread(get_puretrack_tails, key, limit)

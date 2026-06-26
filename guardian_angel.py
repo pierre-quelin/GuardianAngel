@@ -1,13 +1,13 @@
-from datetime import datetime
-from paraglider import Paraglider
-from logger import get_logger
-import threading
-import puretrack_api as ptrk
-import database as db
-from datetime import timezone
 import asyncio
-from discord_api import DiscordApi
 import json
+from datetime import datetime, timezone
+
+import database as db
+import puretrack_api as ptrk
+from discord_bot import DiscordBot
+from event_replay import EventReplay
+from logger import get_logger
+from paraglider import Paraglider
 
 class GuardianAngel:
     def __init__(self, cfg):
@@ -36,7 +36,7 @@ class GuardianAngel:
             p["phone_number"] = "+33700000000"
             p["email"] = ""
             config.append(p)
-        with open('group.json', 'w') as f:
+        with open('cfg/group.json', 'w') as f:
             json.dump(config, f, indent=4)
 
         # grpLive = ptrk.get_puretrack_group_live(cfg['puretrack_site']['group'])
@@ -53,7 +53,14 @@ class GuardianAngel:
             self.add_paraglider(paraglider_cfg)
 
         self._timer = None
-        self.start_monitoring()
+        self._monitor_task = None
+        self._stop_monitoring = asyncio.Event()
+        self._event_queue = asyncio.Queue()
+        self._event_task = None
+        self.discord_bot = None
+        self._discord_task = None
+        self._replay = EventReplay()
+        self._confirmation_task = None
 
     def add_paraglider(self, cfg):
         paraglider = Paraglider(cfg)
@@ -79,30 +86,95 @@ class GuardianAngel:
     def get_paraglider(self, name):
         return self._paragliders.get(name, None)
 
-    def start_monitoring(self, period=30):
-        self.stop_monitoring()
-        self._timer = threading.Timer(period, self._update_states, args=(period,))
-        self._timer.start()
+    async def start_monitoring(self, period=30):
+        self._stop_monitoring.clear()
+        if self._monitor_task is not None:
+            self._monitor_task.cancel()
+        if self._event_task is None:
+            self._event_task = asyncio.create_task(self._process_events())
+        if self.discord_bot is None and self.puretrack_site_cfg is not None:
+            self.discord_bot = DiscordBot(self.puretrack_site_cfg.get('discord_bot', {}))
+            self._discord_task = asyncio.create_task(self.discord_bot.start_async())
+            self._confirmation_task = asyncio.create_task(self._handle_confirmation_events())
+        self._monitor_task = asyncio.create_task(self._monitor_loop(period))
 
-    def _update_states(self, duration):
-        try:
-            self.update_states_from_tracking(duration)
-        finally:
-            # Restart timer after execution
-            self.start_monitoring(duration)
+    async def _monitor_loop(self, period=30):
+        while not self._stop_monitoring.is_set():
+            try:
+                await self.update_states_from_tracking(period)
+            except Exception as exc:
+                self.logger.exception("Monitoring iteration failed: %s", exc)
+            await asyncio.sleep(period)
 
-    def stop_monitoring(self):
-        if self._timer is not None:
-            self._timer.cancel()
-            self._timer = None
+    async def stop_monitoring(self):
+        self._stop_monitoring.set()
+        if self._monitor_task is not None:
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
+            self._monitor_task = None
+        if self._event_task is not None:
+            self._event_task.cancel()
+            try:
+                await self._event_task
+            except asyncio.CancelledError:
+                pass
+            self._event_task = None
+        if self._confirmation_task is not None:
+            self._confirmation_task.cancel()
+            try:
+                await self._confirmation_task
+            except asyncio.CancelledError:
+                pass
+            self._confirmation_task = None
 
-    def update_states_from_tracking(self, duration):
+    async def _handle_confirmation_events(self):
+        while not self._stop_monitoring.is_set():
+            if self.discord_bot is None:
+                await asyncio.sleep(1)
+                continue
+            event = await self.discord_bot._pending_confirmation_events.get()
+            if event.get('type') == 'landing_confirmed':
+                self.logger.info("Landing confirmation received from Discord for %s", event.get('discord_id'))
+                for paraglider in self._paragliders:
+                    if paraglider.discord_id == event.get('discord_id'):
+                        paraglider.landingConfirmed()
+                        break
+            elif event.get('type') == 'landing_rejected':
+                self.logger.info("Landing confirmation rejected from Discord for %s", event.get('discord_id'))
+
+    async def _process_events(self):
+        while not self._stop_monitoring.is_set():
+            try:
+                event = await asyncio.wait_for(self._event_queue.get(), timeout=1)
+            except asyncio.TimeoutError:
+                continue
+
+            event_type = event.get('type')
+            payload = event.get('payload', {})
+
+            if event_type == 'alert':
+                self.logger.info("Processing alert event for %s", payload.get('name'))
+                self._replay.record({'type': event_type, 'payload': payload})
+                if self.discord_bot is not None:
+                    await self.discord_bot.send_message_async(f"Alert for {payload.get('name')}")
+            elif event_type == 'clearance':
+                self.logger.info("Processing clearance event for %s", payload.get('name'))
+                self._replay.record({'type': event_type, 'payload': payload})
+                if self.discord_bot is not None:
+                    await self.discord_bot.send_message_async(f"Clearance for {payload.get('name')}")
+
+            self._event_queue.task_done()
+
+    async def update_states_from_tracking(self, duration):
         session = db.SessionLocal()
 
         # Update database
         for paraglider in self._paragliders:
             paraglider_key = paraglider.puretrack_key
-            if tails := ptrk.get_puretrack_tails(paraglider_key, duration+2): # +2 to ensure we get the last point
+            if tails := await ptrk.get_puretrack_tails_async(paraglider_key, duration+2): # +2 to ensure we get the last point
                 tracks = tails.get('tracks')
                 if tracks[0].get('count') != 0:
                     parsed_points = []
@@ -147,6 +219,10 @@ class GuardianAngel:
             # Log the state of each paraglider
             self.logger.info(f"Paraglider {paraglider.name} / {paraglider.puretrack_key} state: {paraglider.state}")
 
+            if paraglider.state in {'Alert', 'Clearance'}:
+                event_type = 'alert' if paraglider.state == 'Alert' else 'clearance'
+                await self._event_queue.put({'type': event_type, 'payload': {'name': paraglider.name}})
+
         # Purge the database of old points
         db.purge_old_data(session)
 
@@ -160,6 +236,7 @@ class GuardianAngel:
 
     def on_alert(self, sender, message):
         self.logger.info(f"Alert signal received from {sender.name}")
+        asyncio.create_task(self._event_queue.put({'type': 'alert', 'payload': {'name': sender.name}}))
         # TODO - If several alerts are sent, how do you manage the message ids?
         # Sends a message to the guardian angel to check the paraglider
         #  Save the message id to check the response later
@@ -170,6 +247,7 @@ class GuardianAngel:
 
     def on_clearance(self, sender, message):
         self.logger.info(f"Clearance signal received from {sender.name} : discord_id {sender.discord_id}")
+        asyncio.create_task(self._event_queue.put({'type': 'clearance', 'payload': {'name': sender.name}}))
         # TODO - Threads
         # Sends a message to the paraglider to confirm the landing
         # asyncio.create_task(self.discord_bot.post_waiting_landing_confirmation(sender.discord_id))
@@ -177,7 +255,8 @@ class GuardianAngel:
         #  If the paraglider confirms the landing, call paraglider.landingConfirmed()
         hour= datetime.now().strftime("%H:%M:%S")
         message = f"[{sender.name}](https://puretrack.io/?l=44.91038,5.19237&z=15&group={self.puretrack_grp}&k={sender.puretrack_key}) - 🕵I've detected your landing at {hour} 🏁. Is everything ok ❓"
-        self.discord_bot.send_message(message)
+        if self.discord_bot is not None:
+            asyncio.create_task(self.discord_bot.send_message_async(message))
 
     def on_landing_confirmed(self, sender, message):
         self.logger.info(f"Landing confirmed received from {sender.name}")

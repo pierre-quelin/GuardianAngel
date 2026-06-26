@@ -1,8 +1,8 @@
+import asyncio
+
 import discord
 from discord.ext import commands
-from logger import get_logger # TODO
-from blinker import signal
-import threading
+from logger import get_logger
 
 class DiscordBot(commands.Bot):
     def __init__(self, cfg):
@@ -36,6 +36,8 @@ class DiscordBot(commands.Bot):
 
         # Stores messages awaiting reply
         self.landing_to_be_confirmed = {}
+        self._pending_confirmation_events = asyncio.Queue()
+        self._pending_confirmation_ttl = 300
 
     async def on_ready(self):
         # TODO - for test - await self.post_message_to_channel(self.channel_id, self.msg_hello)
@@ -55,14 +57,22 @@ class DiscordBot(commands.Bot):
                         if message.content.lower() in {"yes", "y", "oui", "o"}:
                             self.logger.info(f"User {message.author.name} replied to the specific message: {message.content}")
 
-                            # TODO - Inform the GuardianAngel
-                            self.landing_confirmed.send(self, message="Landing confirmed!")
+                            await self._pending_confirmation_events.put({
+                                'type': 'landing_confirmed',
+                                'discord_id': message.author.id,
+                                'message': message.content,
+                            })
 
                             # Respond to the user
                             await self.post_bye(message.author.id)
                             del self.landing_to_be_confirmed[ref_message.id] # remove from dictionary
                         else:
-                            pass # TODO
+                            await self._pending_confirmation_events.put({
+                                'type': 'landing_rejected',
+                                'discord_id': message.author.id,
+                                'message': message.content,
+                            })
+                            del self.landing_to_be_confirmed[ref_message.id]
                     else:
                         await self.post_not_addressed(message.author.id)
 
@@ -75,12 +85,17 @@ class DiscordBot(commands.Bot):
             return
 
         # Check if the reaction is on the specific message
+        self._cleanup_expired_confirmations()
         if reaction.message.id in self.landing_to_be_confirmed:
-            if self.landing_to_be_confirmed[reaction.message.id] == user.id:
+            if self.landing_to_be_confirmed[reaction.message.id]['discord_id'] == user.id:
                 if str(reaction.emoji) in {"👍", "👌"}:
                     self.logger.info(f"User {user.name} reacted with {str(reaction.emoji)} to the specific message.")
 
-                    # TODO - Inform the GuardianAngel
+                    await self._pending_confirmation_events.put({
+                        'type': 'landing_confirmed',
+                        'discord_id': user.id,
+                        'message': str(reaction.emoji),
+                    })
 
                     # Respond to the user
                     await self.post_bye(user.id)
@@ -101,12 +116,22 @@ class DiscordBot(commands.Bot):
             self.logger.error(f"The channel ID {channel_id} was not found.")
         return None
 
+    async def send_message_async(self, message):
+        """Asynchronously send a message to the configured channel."""
+        if self.channel_id is None:
+            self.logger.warning("No channel configured for Discord bot")
+            return None
+        return await self.post_message_to_channel(self.channel_id, message)
+
 
 
     async def post_waiting_landing_confirmation(self, discord_id):
         self.logger.info(f"post_waiting_landing_confirmation discord_id {discord_id}")
         msg_id = await self.post_message_to_channel(self.channel_id, f"<@{discord_id}> " + self.msg_waiting_landing_confirmation)
-        self.landing_to_be_confirmed[msg_id] = discord_id
+        self.landing_to_be_confirmed[msg_id] = {
+            'discord_id': discord_id,
+            'created_at': asyncio.get_running_loop().time(),
+        }
 
     async def post_bye(self, discord_id):
         self.logger.info(f"post_bye discord_id {discord_id}")
@@ -123,10 +148,32 @@ class DiscordBot(commands.Bot):
         # self._task = self.loop.create_task(self.my_background_task())
         pass
 
+    async def process_pending_confirmations(self, callback):
+        while True:
+            event = await self._pending_confirmation_events.get()
+            await callback(event)
+
+    def _cleanup_expired_confirmations(self):
+        current_time = asyncio.get_running_loop().time()
+        expired_messages = [
+            message_id for message_id, entry in self.landing_to_be_confirmed.items()
+            if isinstance(entry, dict)
+            and isinstance(entry.get('created_at'), (int, float))
+            and (current_time - entry['created_at']) > self._pending_confirmation_ttl
+        ]
+        for message_id in expired_messages:
+            self.logger.info("Pending confirmation expired for message %s", message_id)
+            del self.landing_to_be_confirmed[message_id]
+
     def run(self):
         """Run the bot using the token."""
         self.logger.info("Starting Discord bot...")
         super().run(self.bot_token)  # Use the token stored in the class
+
+    async def start_async(self):
+        """Start the bot in a way compatible with the main asyncio loop."""
+        self.logger.info("Starting Discord bot asynchronously...")
+        await self.start(self.bot_token)
 
 
 
