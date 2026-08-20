@@ -25,6 +25,7 @@ class DiscordBot(commands.Bot):
         # Extract configuration
         self.bot_token = os.getenv('DISCORD_BOT_TOKEN') or cfg.get('bot_token')
         self.channel_id = cfg.get('channel_id')
+        self.send_confirmation_dm = cfg.get('send_confirmation_dm', False)
 
         self.msg_hello = "I'm connected. 🤓\nStay safe."
         self.msg_good_bye = "I'll be back soon... 🤓\nStay safe."
@@ -163,16 +164,29 @@ class DiscordBot(commands.Bot):
     async def post_waiting_landing_confirmation(self, discord_id, message=None, paraglider_key=None):
         self.logger.info(f"post_waiting_landing_confirmation discord_id {discord_id}")
         content = message or self.msg_waiting_landing_confirmation
-        if discord_id:
-            content = f"<@{discord_id}> {content}"
-        msg_id = await self.post_message_to_channel(self.channel_id, content)
-        if msg_id is not None and discord_id:
-            self.landing_to_be_confirmed[msg_id] = {
+        message_ids = []
+
+        if self.channel_id is not None:
+            channel_content = f"<@{discord_id}> {content}" if discord_id else content
+            channel_message_id = await self.post_message_to_channel(self.channel_id, channel_content)
+            if channel_message_id is not None:
+                message_ids.append(channel_message_id)
+
+        if discord_id and getattr(self, 'send_confirmation_dm', False):
+            try:
+                user = self.get_user(discord_id) or await self.fetch_user(discord_id)
+                direct_message = await user.send(content)
+                message_ids.append(direct_message.id)
+            except discord.DiscordException:
+                self.logger.exception("Unable to send landing confirmation DM to %s", discord_id)
+
+        for message_id in message_ids:
+            self.landing_to_be_confirmed[message_id] = {
                 'discord_id': discord_id,
                 'paraglider_key': paraglider_key,
                 'created_at': asyncio.get_running_loop().time(),
             }
-        return msg_id
+        return message_ids[0] if message_ids else None
 
     async def post_bye(self, discord_id):
         self.logger.info(f"post_bye discord_id {discord_id}")

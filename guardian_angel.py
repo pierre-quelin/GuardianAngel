@@ -215,6 +215,13 @@ class GuardianAngel:
                                 f"(https://puretrack.io/?l=44.91038,5.19237&z=15"
                                 f"&group={self.puretrack_grp}&k={paraglider.puretrack_key})"
                             )
+                            contacts = []
+                            if paraglider.phone_number:
+                                contacts.append(f"Téléphone: {paraglider.phone_number}")
+                            if paraglider.email:
+                                contacts.append(f"E-mail: {paraglider.email}")
+                            if contacts:
+                                message += "\n" + " | ".join(contacts)
                         else:
                             message = f"Alert for {payload.get('name')}"
                         await self.discord_bot.send_message_async(message)

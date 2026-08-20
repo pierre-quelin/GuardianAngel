@@ -29,7 +29,8 @@
         "discord_bot": {
             "dev_site": "https://discord.com/developers/applications",
             "bot_token": "",
-            "channel_id": 0
+            "channel_id": 0,
+            "send_confirmation_dm": false
         },
         "database": {
             "url": "sqlite:///data/paragliders.db"

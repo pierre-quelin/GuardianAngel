@@ -27,6 +27,50 @@ Use-case
 
 # Requirements
 
+## Current reimplementation
+
+The current implementation is coroutine-compatible and uses `asyncio` to
+coordinate PureTrack monitoring, event processing, and Discord communication.
+
+It supports:
+
+* asynchronous monitoring without blocking the Discord client;
+* Discord notifications in the configured alert channel;
+* optional delivery of the same landing-confirmation message both to the
+    supervisor alert channel and directly to the paraglider by Discord DM;
+* landing confirmation replies from a configured Discord user;
+* confirmation by text reply (`yes`, `y`, `oui`, `o`) or by `👍` / `👌` reaction;
+* multiple paragliders sharing the same Discord user ID, with each confirmation
+    associated with the PureTrack key of the message being answered;
+* optional capture of raw PureTrack responses for offline testing;
+* replay of captured events without contacting PureTrack, with an optional
+    dry-run mode that disables Discord notifications.
+
+By default, notifications are sent to the configured alert channel, where the
+pilot can reply to the specific landing-confirmation message. To also send the
+landing confirmation by direct message, set `send_confirmation_dm` to `true`
+in the Discord bot configuration. Replies from either message are accepted.
+
+Run the automated tests with:
+
+```sh
+source .venv/bin/activate
+pytest -q
+```
+
+Replay a captured event file without network notifications:
+
+```sh
+python main.py --replay --dry-run \
+        --replay-file data/puretrack_events.json \
+        --delay 0
+```
+
+Raw PureTrack capture is disabled by default. Enable it in the runtime
+configuration with `capture_events` and choose the output path with
+`capture_file`. Keep runtime configuration files containing bot tokens,
+Discord IDs, or channel IDs outside version control.
+
 ## Retrieving information from PureTrack
 
 Recover from PureTrack, automatically, every minute, for all the Adventurers in the group
