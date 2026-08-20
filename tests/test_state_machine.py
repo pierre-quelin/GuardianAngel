@@ -124,6 +124,35 @@ def test_remove_paraglider_works_by_name():
     assert angel._paragliders == []
 
 
+def test_shared_discord_user_confirms_the_targeted_paraglider():
+    angel = GuardianAngel.__new__(GuardianAngel)
+    angel.logger = get_logger('test')
+    angel._paragliders = []
+
+    first = Paraglider({
+        'name': 'First', 'puretrack_key': 'X-first', 'discord_id': 7,
+        'phone_number': '', 'email': '',
+    }, emit_signals=False, initialize=False)
+    second = Paraglider({
+        'name': 'Second', 'puretrack_key': 'X-second', 'discord_id': 7,
+        'phone_number': '', 'email': '',
+    }, emit_signals=False, initialize=False)
+    first._run_initialization()
+    second._run_initialization()
+    angel._paragliders.extend([first, second])
+
+    angel._apply_confirmation_event({
+        'type': 'landing_confirmed',
+        'discord_id': 7,
+        'paraglider_key': 'X-second',
+    })
+
+    assert first.state == 'Clearance'
+    assert second.state == 'Landed'
+    first.cleanup()
+    second.cleanup()
+
+
 @pytest.mark.asyncio
 async def test_start_monitoring_uses_discord_configuration(monkeypatch):
     angel = GuardianAngel.__new__(GuardianAngel)

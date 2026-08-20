@@ -10,7 +10,7 @@ from logger import get_logger
 from paraglider import Paraglider
 
 class GuardianAngel:
-    def __init__(self, cfg):
+    def __init__(self, cfg, fetch_remote_group=True):
         self.logger = get_logger("GuardianAngel")
         self._paragliders = []
 
@@ -30,27 +30,31 @@ class GuardianAngel:
         self._timer = None
         self._monitor_task = None
         self._last_seen_state = {}
+        self._capture_replay = None
         self.puretrack_site_cfg = cfg.get('puretrack_site')
         self.discord_bot_cfg = cfg.get('discord_bot') or (
             self.puretrack_site_cfg.get('discord_bot', {}) if self.puretrack_site_cfg else {}
         )
         self.puretrack_grp = self.puretrack_site_cfg.get('group') if self.puretrack_site_cfg else None
+        if cfg.get('capture_events', False):
+            self._capture_replay = EventReplay(cfg.get('capture_file', 'data/puretrack_events.json'))
 
         db.init_db_engine(cfg.get('database'))
 
-        # Get the list of all paragliders in the group
-        config = []
-        grp = ptrk.get_puretrack_group(cfg['puretrack_site']['group'])
-        for paraglider in grp.get('members'):
-            p = {}
-            p["name"] = paraglider.get('label')
-            p["puretrack_key"] = paraglider.get('key')
-            p["discord_id"] = 0
-            p["phone_number"] = "+33700000000"
-            p["email"] = ""
-            config.append(p)
-        with open('cfg/group.json', 'w') as f:
-            json.dump(config, f, indent=4)
+        if fetch_remote_group:
+            # Get the list of all paragliders in the group
+            config = []
+            grp = ptrk.get_puretrack_group(cfg['puretrack_site']['group'])
+            for paraglider in grp.get('members'):
+                p = {}
+                p["name"] = paraglider.get('label')
+                p["puretrack_key"] = paraglider.get('key')
+                p["discord_id"] = 0
+                p["phone_number"] = "+33700000000"
+                p["email"] = ""
+                config.append(p)
+            with open('cfg/group.json', 'w') as f:
+                json.dump(config, f, indent=4)
 
         # grpLive = ptrk.get_puretrack_group_live(cfg['puretrack_site']['group'])
         # for paraglider in grpLive:
@@ -164,6 +168,11 @@ class GuardianAngel:
             except asyncio.CancelledError:
                 pass
             self._discord_task = None
+        if self.discord_bot is not None and hasattr(self.discord_bot, 'close'):
+            try:
+                await self.discord_bot.close()
+            except Exception as exc:
+                self.logger.exception("Failed to close Discord bot: %s", exc)
 
     async def _handle_confirmation_events(self):
         while not self._stop_monitoring.is_set():
@@ -171,14 +180,17 @@ class GuardianAngel:
                 await asyncio.sleep(1)
                 continue
             event = await self.discord_bot._pending_confirmation_events.get()
-            if event.get('type') == 'landing_confirmed':
-                self.logger.info("Landing confirmation received from Discord for %s", event.get('discord_id'))
-                for paraglider in self._paragliders:
-                    if paraglider.discord_id == event.get('discord_id'):
-                        paraglider.landingConfirmed()
-                        break
-            elif event.get('type') == 'landing_rejected':
-                self.logger.info("Landing confirmation rejected from Discord for %s", event.get('discord_id'))
+            self._apply_confirmation_event(event)
+
+    def _apply_confirmation_event(self, event):
+        if event.get('type') == 'landing_confirmed':
+            self.logger.info("Landing confirmation received from Discord for %s", event.get('discord_id'))
+            for paraglider in self._paragliders:
+                if paraglider.puretrack_key == event.get('paraglider_key'):
+                    paraglider.landingConfirmed()
+                    break
+        elif event.get('type') == 'landing_rejected':
+            self.logger.info("Landing confirmation rejected from Discord for %s", event.get('discord_id'))
 
     async def _process_events(self):
         while not self._stop_monitoring.is_set():
@@ -196,7 +208,16 @@ class GuardianAngel:
                 if self.discord_bot is not None:
                     self.logger.info("Dispatching alert event for %s", payload.get('name'))
                     try:
-                        await self.discord_bot.send_message_async(f"Alert for {payload.get('name')}")
+                        paraglider = self.get_paraglider(payload.get('name'))
+                        if paraglider is not None:
+                            message = (
+                                f"⚠️ Alert for [{paraglider.name}]"
+                                f"(https://puretrack.io/?l=44.91038,5.19237&z=15"
+                                f"&group={self.puretrack_grp}&k={paraglider.puretrack_key})"
+                            )
+                        else:
+                            message = f"Alert for {payload.get('name')}"
+                        await self.discord_bot.send_message_async(message)
                     except Exception as exc:
                         self.logger.exception("Failed to send alert Discord message: %s", exc)
             elif event_type == 'clearance':
@@ -205,7 +226,26 @@ class GuardianAngel:
                 if self.discord_bot is not None:
                     self.logger.info("Dispatching clearance event for %s", payload.get('name'))
                     try:
-                        await self.discord_bot.send_message_async(f"Clearance for {payload.get('name')}")
+                        paraglider = self.get_paraglider(payload.get('name'))
+                        if paraglider is not None:
+                            hour = datetime.now().strftime("%H:%M:%S")
+                            message = (
+                                f"[{paraglider.name}]"
+                                f"(https://puretrack.io/?l=44.91038,5.19237&z=15"
+                                f"&group={self.puretrack_grp}&k={paraglider.puretrack_key})"
+                                f" - 🕵I've detected your landing at {hour} 🏁."
+                                " Is everything ok ❓"
+                            )
+                        else:
+                            message = f"Clearance for {payload.get('name')}"
+                        if paraglider is not None and paraglider.discord_id:
+                            await self.discord_bot.post_waiting_landing_confirmation(
+                                paraglider.discord_id,
+                                message,
+                                paraglider.puretrack_key,
+                            )
+                        else:
+                            await self.discord_bot.send_message_async(message)
                     except Exception as exc:
                         self.logger.exception("Failed to send clearance Discord message: %s", exc)
 
@@ -218,55 +258,76 @@ class GuardianAngel:
         for paraglider in self._paragliders:
             paraglider_key = paraglider.puretrack_key
             if tails := await ptrk.get_puretrack_tails_async(paraglider_key, duration+2): # +2 to ensure we get the last point
-                tracks = tails.get('tracks')
-                if tracks[0].get('count') != 0:
-                    parsed_points = []
-                    last_parsed_point = ptrk.parse_puretrack_record(tracks[0].get('last'))
-                    points = tracks[0].get('points')
-                    # Reversed, the last first
-                    for point in reversed(points):
-                        parsed_point = ptrk.parse_puretrack_record(point)
-                        if parsed_point.get('timestamp') == last_parsed_point.get('timestamp'):
-                            # If timestamp is the same, the first record is the only true
-                            self.logger.debug("Point: not used. Always registered the first one.")
-                            continue
-                        if (last_parsed_point.get('speed_calc') == None):
-                            last_parsed_point['speed_calc'] = round(ptrk.calculate_speed(parsed_point, last_parsed_point), 2)
-                        self.logger.info(f"Point: {last_parsed_point}")
-                        parsed_points.append(last_parsed_point)
-                        last_parsed_point = parsed_point
-                        pass
-
-                    # Add the new points to the database
-                    db.update_paraglider_data(session, paraglider_key, parsed_points)
+                if self._capture_replay is not None:
+                    self._capture_replay.record({
+                        'type': 'puretrack',
+                        'payload': {'key': paraglider_key, 'response': tails},
+                    })
+                self._store_tracking_response(session, paraglider_key, tails)
 
         # Update paragliders states
         # TODO - Check if the paraglider is in the database
         for paraglider in self._paragliders:
             # Update paraglider's speed, coordinates, and course
             # Retrieve the last known state of the paraglider from the database
-            last_state = db.get_last_paraglider_state(session, paraglider.puretrack_key)
-            if last_state:
-                paraglider.update({
-                    'datetime': last_state.datetime.replace(tzinfo=timezone.utc), # SQLite doesn't save Time Zone
-                    'coordinates': (last_state.latitude, last_state.longitude),
-                    'course': last_state.course,
-                    'altitude_gnd_calc': last_state.altitude_gnd_calc,
-                    # paraglider.speed = last_state.get('speed', last_known_state.get('speed_calc', 0))
-                    'speed': last_state.speed,
-                    'avg_speed': db.calculate_average_speed(session, paraglider.puretrack_key, minutes=5) # Calculate the average speed over the last 5 minutes
-                })
-            else:
-                pass # TODO - See later if something is needed
-
-            # Log the state of each paraglider
-            self.logger.info(f"Paraglider {paraglider.name} / {paraglider.puretrack_key} state: {paraglider.state}")
-            self._queue_state_event_if_changed(paraglider)
+            self._update_paraglider_state(session, paraglider)
 
         # Purge the database of old points
         db.purge_old_data(session)
 
         session.close()
+
+    async def process_replay_event(self, event):
+        """Apply one captured PureTrack or state event through the live pipeline."""
+        if event.get('type') != 'puretrack':
+            await self._event_queue.put(event)
+            return
+
+        payload = event.get('payload', {})
+        paraglider = next(
+            (item for item in self._paragliders if item.puretrack_key == payload.get('key')),
+            None,
+        )
+        if paraglider is None:
+            self.logger.warning("Ignoring replay event for unknown PureTrack key %s", payload.get('key'))
+            return
+
+        session = db.SessionLocal()
+        self._store_tracking_response(session, paraglider.puretrack_key, payload.get('response', {}))
+        self._update_paraglider_state(session, paraglider)
+        db.purge_old_data(session)
+        session.close()
+
+    def _store_tracking_response(self, session, paraglider_key, tails):
+        tracks = tails.get('tracks', [])
+        if not tracks or tracks[0].get('count', 0) == 0:
+            return
+
+        last = ptrk.parse_puretrack_record(tracks[0].get('last'))
+        points = []
+        for point in reversed(tracks[0].get('points', [])):
+            parsed = ptrk.parse_puretrack_record(point)
+            if parsed.get('timestamp') == last.get('timestamp'):
+                continue
+            if last.get('speed_calc') is None:
+                last['speed_calc'] = round(ptrk.calculate_speed(parsed, last), 2)
+            points.append(last)
+            last = parsed
+        db.update_paraglider_data(session, paraglider_key, points)
+
+    def _update_paraglider_state(self, session, paraglider):
+        last_state = db.get_last_paraglider_state(session, paraglider.puretrack_key)
+        if last_state:
+            paraglider.update({
+                'datetime': last_state.datetime.replace(tzinfo=timezone.utc),
+                'coordinates': (last_state.latitude, last_state.longitude),
+                'course': last_state.course,
+                'altitude_gnd_calc': last_state.altitude_gnd_calc,
+                'speed': last_state.speed,
+                'avg_speed': db.calculate_average_speed(session, paraglider.puretrack_key, minutes=5),
+            })
+        self.logger.info("Paraglider %s / %s state: %s", paraglider.name, paraglider.puretrack_key, paraglider.state)
+        self._queue_state_event_if_changed(paraglider)
 
     def _queue_state_event_if_changed(self, paraglider):
         state_key = paraglider.state
@@ -318,15 +379,6 @@ class GuardianAngel:
     def on_clearance(self, sender, message):
         self.logger.info(f"Clearance signal received from {sender.name} : discord_id {sender.discord_id}")
         self._queue_state_event_if_changed(sender)
-        # TODO - Threads
-        # Sends a message to the paraglider to confirm the landing
-        # asyncio.create_task(self.discord_bot.post_waiting_landing_confirmation(sender.discord_id))
-        # Waits for the paraglider's response
-        #  If the paraglider confirms the landing, call paraglider.landingConfirmed()
-        hour= datetime.now().strftime("%H:%M:%S")
-        message = f"[{sender.name}](https://puretrack.io/?l=44.91038,5.19237&z=15&group={self.puretrack_grp}&k={sender.puretrack_key}) - 🕵I've detected your landing at {hour} 🏁. Is everything ok ❓"
-        if self.discord_bot is not None:
-            asyncio.create_task(self.discord_bot.send_message_async(message))
 
     def on_landing_confirmed(self, sender, message):
         self.logger.info(f"Landing confirmed received from {sender.name}")

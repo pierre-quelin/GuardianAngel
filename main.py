@@ -49,15 +49,27 @@ async def main():
     if options['debug']:
         logger.info("Debug mode enabled")
 
-    angel = GuardianAngel(cfg.get('guardian_angel'))
+    angel = GuardianAngel(
+        cfg.get('guardian_angel'),
+        fetch_remote_group=not options['replay_mode'],
+    )
     if options['replay_mode']:
         logger.info("Replay mode enabled")
         replay = EventReplay(options['replay_file'] or 'data/replay_events.json')
         if options['dry_run']:
             logger.info("Dry run enabled: replaying events without sending Discord notifications")
             angel.discord_bot = None
+        angel._stop_monitoring.clear()
+        angel._event_task = asyncio.create_task(angel._process_events())
         try:
-            await replay.replay(angel._event_queue, delay=options['delay'], limit=options['limit'], storage_path=options['replay_file'])
+            await replay.replay(
+                angel._event_queue,
+                delay=options['delay'],
+                limit=options['limit'],
+                storage_path=options['replay_file'],
+                handler=angel.process_replay_event,
+            )
+            await angel._event_queue.join()
         except FileNotFoundError as exc:
             logger.error(str(exc))
             return

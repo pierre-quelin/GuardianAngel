@@ -33,7 +33,7 @@ class EventReplay:
         with open(self.storage_path, 'r', encoding='utf-8') as handle:
             return json.load(handle)
 
-    async def replay(self, queue, delay=1.0, limit=None, storage_path=None):
+    async def replay(self, queue, delay=1.0, limit=None, storage_path=None, handler=None):
         if storage_path is not None:
             self.storage_path = storage_path
 
@@ -44,5 +44,9 @@ class EventReplay:
         if limit is not None:
             events = events[:limit]
         for item in events:
-            await queue.put(item['event'])
+            event = item['event']
+            if handler is None:
+                await queue.put(event)
+            else:
+                await handler(event)
             await asyncio.sleep(delay)

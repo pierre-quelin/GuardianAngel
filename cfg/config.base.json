@@ -24,6 +24,8 @@
         "puretrack_site": {
             "group": "my-grp"
         },
+        "capture_events": false,
+        "capture_file": "data/puretrack_events.json",
         "discord_bot": {
             "dev_site": "https://discord.com/developers/applications",
             "bot_token": "",

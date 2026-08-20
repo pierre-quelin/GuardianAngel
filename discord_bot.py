@@ -55,14 +55,16 @@ class DiscordBot(commands.Bot):
         if message.reference and message.reference.resolved:
             ref_message = message.reference.resolved
             if ref_message.author == self.user:
-                if ref_message.id in self.landing_to_be_confirmed:
-                    if self.landing_to_be_confirmed[ref_message.id] == message.author.id:
+                confirmation = self.landing_to_be_confirmed.get(ref_message.id)
+                if confirmation is not None:
+                    if confirmation['discord_id'] == message.author.id:
                         if message.content.lower() in {"yes", "y", "oui", "o"}:
                             self.logger.info(f"User {message.author.name} replied to the specific message: {message.content}")
 
                             await self._pending_confirmation_events.put({
                                 'type': 'landing_confirmed',
                                 'discord_id': message.author.id,
+                                'paraglider_key': confirmation.get('paraglider_key'),
                                 'message': message.content,
                             })
 
@@ -73,6 +75,7 @@ class DiscordBot(commands.Bot):
                             await self._pending_confirmation_events.put({
                                 'type': 'landing_rejected',
                                 'discord_id': message.author.id,
+                                'paraglider_key': confirmation.get('paraglider_key'),
                                 'message': message.content,
                             })
                             del self.landing_to_be_confirmed[ref_message.id]
@@ -83,30 +86,42 @@ class DiscordBot(commands.Bot):
         await self.process_commands(message)
 
     async def on_reaction_add(self, reaction, user):
-        # Ignore reactions added by the bot itself
-        if user == self.user:
+        # Raw reaction events are handled by on_raw_reaction_add below.
+        return
+
+    async def on_raw_reaction_add(self, payload):
+        if payload.user_id == self.user.id:
             return
 
-        # Check if the reaction is on the specific message
+        await self._handle_reaction_confirmation(
+            payload.message_id,
+            payload.user_id,
+            str(payload.emoji),
+            str(payload.user_id),
+        )
+
+    async def _handle_reaction_confirmation(self, message_id, user_id, emoji, user_name):
+        self.logger.info("Reaction received: message=%s user=%s emoji=%s", message_id, user_id, emoji)
         self._cleanup_expired_confirmations()
-        if reaction.message.id in self.landing_to_be_confirmed:
-            if self.landing_to_be_confirmed[reaction.message.id]['discord_id'] == user.id:
-                if str(reaction.emoji) in {"👍", "👌"}:
-                    self.logger.info(f"User {user.name} reacted with {str(reaction.emoji)} to the specific message.")
+        confirmation = self.landing_to_be_confirmed.get(message_id)
+        if confirmation is None:
+            self.logger.info("Reaction ignored: no pending confirmation for message %s", message_id)
+            return
+        if confirmation['discord_id'] != user_id:
+            await self.post_not_addressed(user_id)
+            return
+        if emoji not in {"👍", "👌"}:
+            return
 
-                    await self._pending_confirmation_events.put({
-                        'type': 'landing_confirmed',
-                        'discord_id': user.id,
-                        'message': str(reaction.emoji),
-                    })
-
-                    # Respond to the user
-                    await self.post_bye(user.id)
-                    del self.landing_to_be_confirmed[reaction.message.id] # remove from dictionary
-                else:
-                    pass # TODO - Alert ?
-            else:
-                await self.post_not_addressed(user.id)
+        self.logger.info("User %s confirmed landing for message %s", user_name, message_id)
+        await self._pending_confirmation_events.put({
+            'type': 'landing_confirmed',
+            'discord_id': user_id,
+            'paraglider_key': confirmation.get('paraglider_key'),
+            'message': emoji,
+        })
+        await self.post_bye(user_id)
+        self.landing_to_be_confirmed.pop(message_id, None)
 
     async def post_message_to_channel(self, channel_id, message):
         """Post a message to a specific channel."""
@@ -145,13 +160,19 @@ class DiscordBot(commands.Bot):
 
 
 
-    async def post_waiting_landing_confirmation(self, discord_id):
+    async def post_waiting_landing_confirmation(self, discord_id, message=None, paraglider_key=None):
         self.logger.info(f"post_waiting_landing_confirmation discord_id {discord_id}")
-        msg_id = await self.post_message_to_channel(self.channel_id, f"<@{discord_id}> " + self.msg_waiting_landing_confirmation)
-        self.landing_to_be_confirmed[msg_id] = {
-            'discord_id': discord_id,
-            'created_at': asyncio.get_running_loop().time(),
-        }
+        content = message or self.msg_waiting_landing_confirmation
+        if discord_id:
+            content = f"<@{discord_id}> {content}"
+        msg_id = await self.post_message_to_channel(self.channel_id, content)
+        if msg_id is not None and discord_id:
+            self.landing_to_be_confirmed[msg_id] = {
+                'discord_id': discord_id,
+                'paraglider_key': paraglider_key,
+                'created_at': asyncio.get_running_loop().time(),
+            }
+        return msg_id
 
     async def post_bye(self, discord_id):
         self.logger.info(f"post_bye discord_id {discord_id}")
