@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 import discord
 from discord.ext import commands
@@ -22,7 +23,7 @@ class DiscordBot(commands.Bot):
         self.logger = get_logger("GuardianAngel")
 
         # Extract configuration
-        self.bot_token = cfg.get('bot_token')
+        self.bot_token = os.getenv('DISCORD_BOT_TOKEN') or cfg.get('bot_token')
         self.channel_id = cfg.get('channel_id')
 
         self.msg_hello = "I'm connected. 🤓\nStay safe."
@@ -38,10 +39,12 @@ class DiscordBot(commands.Bot):
         self.landing_to_be_confirmed = {}
         self._pending_confirmation_events = asyncio.Queue()
         self._pending_confirmation_ttl = 300
+        self._ready_event = asyncio.Event()
 
     async def on_ready(self):
         # TODO - for test - await self.post_message_to_channel(self.channel_id, self.msg_hello)
         self.logger.info(f"Discord bot connected as '{self.user}'")
+        self._ready_event.set()
 
     async def on_message(self, message):
         # Ignore messages sent by the bot itself
@@ -108,6 +111,12 @@ class DiscordBot(commands.Bot):
     async def post_message_to_channel(self, channel_id, message):
         """Post a message to a specific channel."""
         channel = self.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(channel_id)
+            except discord.DiscordException:
+                self.logger.exception("Unable to fetch Discord channel %s", channel_id)
+                return None
         if channel:
             msg = await channel.send(message)
             self.logger.info(f"Message '{message}' posted to channel {channel_id}")
@@ -121,6 +130,12 @@ class DiscordBot(commands.Bot):
         if self.channel_id is None:
             self.logger.warning("No channel configured for Discord bot")
             return None
+        if not self.is_ready():
+            try:
+                await asyncio.wait_for(self._ready_event.wait(), timeout=30)
+            except asyncio.TimeoutError:
+                self.logger.error("Discord bot did not become ready before sending message")
+                return None
         self.logger.info("Attempting to post Discord message to channel %s: %s", self.channel_id, message)
         try:
             return await self.post_message_to_channel(self.channel_id, message)

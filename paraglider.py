@@ -26,6 +26,7 @@ class Paraglider:
         self._logger = get_logger(self.name)
         self._emit_signals = False
         self._initialization_completed = False
+        self._cleaned_up = False
         self._defer_initialization = not emit_signals
         self._machine = Machine(
             model=self,
@@ -145,8 +146,13 @@ class Paraglider:
 
     def arm_timer(self, duration):
         self.cancel_timer()
-        self._timer = threading.Timer(duration, self.timeout)
+        self._timer = threading.Timer(duration, self._timer_expired)
+        self._timer.daemon = True
         self._timer.start()
+
+    def _timer_expired(self):
+        if not self._cleaned_up:
+            self.timeout()
 
     def cancel_timer(self):
         if self._timer is not None:
@@ -165,4 +171,5 @@ class Paraglider:
             self.arm_timer(300)
 
     def cleanup(self):
+        self._cleaned_up = True
         self.cancel_timer()

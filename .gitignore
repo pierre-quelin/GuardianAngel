@@ -3,5 +3,6 @@
 /.vscode/
 /data/
 /logs/
+/cfg/config.json
 /.project
 /.pydevproject

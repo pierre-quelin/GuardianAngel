@@ -134,6 +134,8 @@ class GuardianAngel:
 
     async def stop_monitoring(self):
         self._stop_monitoring.set()
+        for paraglider in getattr(self, '_paragliders', []):
+            paraglider.cancel_timer()
         if self._monitor_task is not None:
             self._monitor_task.cancel()
             try:

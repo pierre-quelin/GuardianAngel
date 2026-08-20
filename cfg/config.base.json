@@ -26,7 +26,7 @@
         },
         "discord_bot": {
             "dev_site": "https://discord.com/developers/applications",
-            "bot_token":"ZZZZZZZZZZZZZZZZZZZZZZZZZZ.ZZZZZZ.ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+            "bot_token": "",
             "channel_id": 0
         },
         "database": {
