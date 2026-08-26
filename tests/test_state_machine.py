@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
-from types import MethodType
+from types import MethodType, SimpleNamespace
 
 import pytest
 
@@ -235,3 +235,42 @@ async def test_start_monitoring_uses_discord_configuration(monkeypatch):
     await angel.stop_monitoring()
 
     assert created['cfg'] == angel.discord_bot_cfg
+
+
+@pytest.mark.asyncio
+async def test_alert_confirmation_targets_the_paraglider():
+    angel = GuardianAngel.__new__(GuardianAngel)
+    angel.logger = get_logger('test')
+    angel._stop_monitoring = asyncio.Event()
+    angel._event_queue = asyncio.Queue()
+    angel._replay = SimpleNamespace(record=lambda event: None)
+    angel.puretrack_grp = 'test-group'
+    paraglider = SimpleNamespace(
+        name='Pilot',
+        discord_id=123,
+        puretrack_key='X-pilot',
+        phone_number='',
+        email='',
+    )
+    angel._paragliders = [paraglider]
+    angel.discord_bot = SimpleNamespace()
+    targeted = []
+    plain = []
+
+    async def post_confirmation(discord_id, message, paraglider_key, mention_first=True):
+        targeted.append((discord_id, message, paraglider_key, mention_first))
+
+    async def send_message(message):
+        plain.append(message)
+
+    angel.discord_bot.post_waiting_landing_confirmation = post_confirmation
+    angel.discord_bot.send_message_async = send_message
+
+    task = asyncio.create_task(angel._process_events())
+    await angel._event_queue.put({'type': 'alert', 'payload': {'name': 'Pilot'}})
+    await asyncio.sleep(0)
+    angel._stop_monitoring.set()
+    await task
+
+    assert targeted == [(123, '⚠️ Alert for [Pilot](https://puretrack.io/?l=44.91038,5.19237&z=15&group=test-group&k=X-pilot)', 'X-pilot', False)]
+    assert plain == []

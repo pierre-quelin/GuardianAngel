@@ -12,6 +12,7 @@ superviseurs et les parapentistes via Discord.
 - [x] Appels PureTrack bloquants exécutés hors de la boucle asyncio.
 - [x] Envoi de notifications dans le canal Discord général.
 - [x] Notification du démarrage et de l'arrêt de la surveillance dans Discord.
+- [x] Confirmation Discord ciblée des alertes par le parapentiste.
 - [x] Envoi optionnel du même message en DM au parapentiste.
 - [x] Réception des réponses texte et des réactions Discord.
 - [x] Gestion des réactions avec et sans message présent dans le cache Discord.
@@ -58,6 +59,7 @@ superviseurs et les parapentistes via Discord.
 - [ ] Définir les messages d'alerte destinés aux superviseurs.
 - [ ] Ajouter téléphone et e-mail dans les alertes lorsque disponibles.
 - [ ] Gérer explicitement une réponse négative.
+- [x] Gérer explicitement une réponse négative.
 - [ ] Gérer l'expiration et le renouvellement des confirmations.
 - [ ] Gérer les erreurs Discord et les limitations de débit.
 - [ ] Ajouter une stratégie de reprise après perte de connexion Discord.

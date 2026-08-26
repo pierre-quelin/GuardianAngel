@@ -227,14 +227,22 @@ class GuardianAngel:
                             )
                             contacts = []
                             if paraglider.phone_number:
-                                contacts.append(f"Téléphone: {paraglider.phone_number}")
+                                contacts.append(f"Phone: {paraglider.phone_number}")
                             if paraglider.email:
-                                contacts.append(f"E-mail: {paraglider.email}")
+                                contacts.append(f"Email: {paraglider.email}")
                             if contacts:
                                 message += "\n" + " | ".join(contacts)
                         else:
                             message = f"Alert for {payload.get('name')}"
-                        await self.discord_bot.send_message_async(message)
+                        if paraglider is not None and paraglider.discord_id:
+                            await self.discord_bot.post_waiting_landing_confirmation(
+                                paraglider.discord_id,
+                                message,
+                                paraglider.puretrack_key,
+                                mention_first=False,
+                            )
+                        else:
+                            await self.discord_bot.send_message_async(message)
                     except Exception as exc:
                         self.logger.exception("Failed to send alert Discord message: %s", exc)
             elif event_type == 'clearance':

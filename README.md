@@ -37,10 +37,12 @@ It supports:
 * asynchronous monitoring without blocking the Discord client;
 * Discord notifications in the configured alert channel;
 * surveillance startup and shutdown notifications in the configured alert channel;
+* targeted Discord alert confirmations for the paraglider;
 * optional delivery of the same landing-confirmation message both to the
     supervisor alert channel and directly to the paraglider by Discord DM;
 * landing confirmation replies from a configured Discord user;
-* confirmation by text reply (`yes`, `y`, `oui`, `o`) or by `👍` / `👌` reaction;
+* confirmation by text reply (`yes`, `I am safe`, `I am safe and have landed`) or by `👍` / `👌` reaction;
+* negative response by text reply (`no`, `I need assistance`, `I am not safe`) or by `👎` reaction;
 * multiple paragliders sharing the same Discord user ID, with each confirmation
     associated with the PureTrack key of the message being answered;
 * optional capture of raw PureTrack responses for offline testing;

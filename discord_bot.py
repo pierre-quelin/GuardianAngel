@@ -29,9 +29,22 @@ class DiscordBot(commands.Bot):
 
         self.msg_hello = "I'm connected. 🤓\nStay safe."
         self.msg_good_bye = "I'll be back soon... 🤓\nStay safe."
-        self.msg_waiting_landing_confirmation = "🕵I've detected your landing 🏁. Is everything ok ❓" # 🦺⚠❓🏁👀
-        self.msg_bye = "👍 Good luck, I wish you all the best. See you later 😉"
-        self.msg_not_addressed = "👮 This message was not addressed to you! Thank you."
+        self.msg_confirmation_instructions = (
+            "Please reply to this message:\n"
+            "👍 = I am safe and have landed.\n"
+            "👎 = I need assistance or I am not safe."
+        )
+        self.msg_waiting_landing_confirmation = self.msg_confirmation_instructions
+        self.msg_bye = "✅ Thank you. Your response has been recorded."
+        self.msg_negative_response = (
+            "🚨 Your response indicates that you need assistance or are not safe. "
+            "The alert remains active. The guardian has been notified."
+        )
+        self.msg_not_addressed = "This message was not addressed to you."
+        self.msg_unrecognized_response = (
+            "⚠️ Response not recognized. Please reply with 👍 if you are safe and have landed, "
+            "or 👎 if you need assistance or are not safe."
+        )
 
         # self.cmd_state = f"{member.mention} is flying. See [PureTrack](https://puretrack.io/?l=44.91038,5.19237&z=15&group={self.puretrack_grp})"
         # self.cmd_error = f'An error occurred while checking the user: {e}'
@@ -70,7 +83,8 @@ class DiscordBot(commands.Bot):
                 confirmation = self.landing_to_be_confirmed.get(ref_message.id)
                 if confirmation is not None:
                     if confirmation['discord_id'] == message.author.id:
-                        if message.content.lower() in {"yes", "y", "oui", "o"}:
+                        response = message.content.strip().lower()
+                        if response in {"yes", "i am safe", "i am safe and have landed"}:
                             self.logger.info(f"User {message.author.name} replied to the specific message: {message.content}")
 
                             await self._pending_confirmation_events.put({
@@ -83,14 +97,21 @@ class DiscordBot(commands.Bot):
                             # Respond to the user
                             await self.post_bye(message.author.id)
                             del self.landing_to_be_confirmed[ref_message.id] # remove from dictionary
-                        else:
+                        elif response in {"no", "i need assistance", "i am not safe"}:
                             await self._pending_confirmation_events.put({
                                 'type': 'landing_rejected',
                                 'discord_id': message.author.id,
                                 'paraglider_key': confirmation.get('paraglider_key'),
                                 'message': message.content,
                             })
+                            await self.post_negative_acknowledgment(message.author.id)
                             del self.landing_to_be_confirmed[ref_message.id]
+                        else:
+                            if self.channel_id is not None:
+                                await self.post_message_to_channel(
+                                    self.channel_id,
+                                    self.msg_unrecognized_response,
+                                )
                     else:
                         await self.post_not_addressed(message.author.id)
 
@@ -122,17 +143,26 @@ class DiscordBot(commands.Bot):
         if confirmation['discord_id'] != user_id:
             await self.post_not_addressed(user_id)
             return
-        if emoji not in {"👍", "👌"}:
+        if emoji not in {"👍", "👌", "👎"}:
             return
 
-        self.logger.info("User %s confirmed landing for message %s", user_name, message_id)
+        is_positive = emoji in {"👍", "👌"}
+        self.logger.info(
+            "User %s %s message %s",
+            user_name,
+            "confirmed landing for" if is_positive else "reported an unsafe situation for",
+            message_id,
+        )
         await self._pending_confirmation_events.put({
-            'type': 'landing_confirmed',
+            'type': 'landing_confirmed' if is_positive else 'landing_rejected',
             'discord_id': user_id,
             'paraglider_key': confirmation.get('paraglider_key'),
             'message': emoji,
         })
-        await self.post_bye(user_id)
+        if is_positive:
+            await self.post_bye(user_id)
+        else:
+            await self.post_negative_acknowledgment(user_id)
         self.landing_to_be_confirmed.pop(message_id, None)
 
     async def post_message_to_channel(self, channel_id, message):
@@ -172,9 +202,13 @@ class DiscordBot(commands.Bot):
 
 
 
-    async def post_waiting_landing_confirmation(self, discord_id, message=None, paraglider_key=None):
+    async def post_waiting_landing_confirmation(
+        self, discord_id, message=None, paraglider_key=None, mention_first=True
+    ):
         self.logger.info(f"post_waiting_landing_confirmation discord_id {discord_id}")
         content = message or self.msg_waiting_landing_confirmation
+        if message:
+            content = f"{content}\n\n{self.msg_confirmation_instructions}"
         message_ids = []
 
         if self.channel_id is not None:
@@ -184,7 +218,12 @@ class DiscordBot(commands.Bot):
                 except asyncio.TimeoutError:
                     self.logger.error("Discord bot did not become ready before sending confirmation")
                     return None
-            channel_content = f"<@{discord_id}> {content}" if discord_id else content
+            if discord_id and message and not mention_first:
+                channel_content = (
+                    f"{message}\n\n<@{discord_id}> {self.msg_confirmation_instructions}"
+                )
+            else:
+                channel_content = f"<@{discord_id}> {content}" if discord_id else content
             channel_message_id = await self.post_message_to_channel(self.channel_id, channel_content)
             if channel_message_id is not None:
                 message_ids.append(channel_message_id)
@@ -208,6 +247,13 @@ class DiscordBot(commands.Bot):
     async def post_bye(self, discord_id):
         self.logger.info(f"post_bye discord_id {discord_id}")
         await self.post_message_to_channel(self.channel_id, f"<@{discord_id}> " + self.msg_bye)
+
+    async def post_negative_acknowledgment(self, discord_id):
+        self.logger.info(f"post_negative_acknowledgment discord_id {discord_id}")
+        await self.post_message_to_channel(
+            self.channel_id,
+            f"<@{discord_id}> " + self.msg_negative_response,
+        )
 
     async def post_not_addressed(self, discord_id):
         self.logger.info(f"post_not_addressed discord_id {discord_id}")
