@@ -41,11 +41,22 @@ class DiscordBot(commands.Bot):
         self._pending_confirmation_events = asyncio.Queue()
         self._pending_confirmation_ttl = 300
         self._ready_event = asyncio.Event()
+        self._startup_message_sent = False
+        self._shutdown_message_sent = False
 
     async def on_ready(self):
-        # TODO - for test - await self.post_message_to_channel(self.channel_id, self.msg_hello)
         self.logger.info(f"Discord bot connected as '{self.user}'")
         self._ready_event.set()
+        if not self._startup_message_sent:
+            await self.send_message_async(self.msg_hello)
+            self._startup_message_sent = True
+
+    async def send_shutdown_message(self):
+        if self._shutdown_message_sent or not self.is_ready():
+            return None
+        message_id = await self.send_message_async(self.msg_good_bye)
+        self._shutdown_message_sent = True
+        return message_id
 
     async def on_message(self, message):
         # Ignore messages sent by the bot itself
@@ -167,6 +178,12 @@ class DiscordBot(commands.Bot):
         message_ids = []
 
         if self.channel_id is not None:
+            if not self.is_ready():
+                try:
+                    await asyncio.wait_for(self._ready_event.wait(), timeout=30)
+                except asyncio.TimeoutError:
+                    self.logger.error("Discord bot did not become ready before sending confirmation")
+                    return None
             channel_content = f"<@{discord_id}> {content}" if discord_id else content
             channel_message_id = await self.post_message_to_channel(self.channel_id, channel_content)
             if channel_message_id is not None:

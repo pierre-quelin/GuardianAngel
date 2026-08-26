@@ -77,10 +77,9 @@ async def test_replay_applies_captured_puretrack_event(tmp_path):
         },
     })
 
-    assert paraglider.state == 'Clearance'
+    assert paraglider.state == 'Disconnected'
     await asyncio.sleep(0)
-    assert angel._event_queue.qsize() == 1
-    assert (await angel._event_queue.get())['type'] == 'clearance'
+    assert angel._event_queue.qsize() == 0
     paraglider.cleanup()
 
 

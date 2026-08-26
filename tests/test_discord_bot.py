@@ -50,6 +50,9 @@ async def test_landing_confirmation_message_is_registered():
     bot.logger = get_logger('test')
     bot.channel_id = 55
     bot.landing_to_be_confirmed = {}
+    bot._ready_event = asyncio.Event()
+    bot._ready_event.set()
+    bot.is_ready = lambda: True
 
     async def post_message_to_channel(channel_id, message):
         assert channel_id == 55

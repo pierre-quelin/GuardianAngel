@@ -43,6 +43,7 @@ class Paraglider:
         self._machine.add_transition(trigger='init', source='Initial', dest='Unknown')
         self._machine.add_transition(trigger='connected', source='Disconnected', dest='Unknown')
         self._machine.add_transition(trigger='timeout', source='Disconnected', dest='Alert')
+        self._machine.add_transition(trigger='timeout', source='Unknown', dest='Alert')
         self._machine.add_transition(trigger='nullSpeed', source='Flying', dest='Clearance')
         self._machine.add_transition(trigger='highSpeed', source='Flying', dest='Alert')
         self._machine.add_transition(trigger='disconnected', source='Flying', dest='Disconnected')
@@ -52,7 +53,8 @@ class Paraglider:
         self._machine.add_transition(trigger='timeout', source='Clearance', dest='Alert')
         self._machine.add_transition(trigger='flying', source='Landed', dest='Flying')
         self._machine.add_transition(trigger='check', source='Unknown', dest='Flying', conditions='is_flying')
-        self._machine.add_transition(trigger='check', source='Unknown', dest='Clearance', unless='is_flying')
+        self._machine.add_transition(trigger='check', source='Unknown', dest='Disconnected', conditions='is_disconnected')
+        self._machine.add_transition(trigger='check', source='Unknown', dest='Landed', conditions='has_recent_data', unless='is_flying')
 
         if initialize:
             self.initialize()
@@ -71,9 +73,21 @@ class Paraglider:
         self._initialization_completed = True
         self._logger.info(f"Paraglider {self.name} created. State: {self.state}")
 
+    def restore_state(self, state):
+        if state not in Paraglider.states or state == 'Initial':
+            return False
+        self._machine.set_state(state, model=self)
+        self._logger.info(f"Paraglider {self.name} state restored: {state}")
+        return True
+
     def on_enter_Unknown(self):
         self._logger.info(f"Entry action for Unknown state for {self.name}")
-        self.check()
+        self.arm_timer(300)
+        if self._last_datetime is not None:
+            self.check()
+
+    def on_exit_Unknown(self):
+        self.cancel_timer()
 
     def on_enter_Clearance(self):
         self._logger.info(f"Entry action for Clearance state for {self.name}")
@@ -91,16 +105,28 @@ class Paraglider:
             self.alert.send(self, message="alert!")
             self.arm_timer(300) # Arm a timer for 5 minutes
 
+    def on_enter_Disconnected(self):
+        self._logger.warning(f"Entry action for Disconnected state for {self.name}")
+        self.arm_timer(300)
+
     def on_exit_Alert(self):
         self._logger.warning(f"Exit action for Alert state for {self.name}")
         self.cancel_timer()
 
     @property
     def is_flying(self):
-        # speed > 10km/h ou 2,78m/s
-        if self._speed > 2.78:
-            return True
-        return False
+        return self.has_recent_data and self._avg_speed > 2.78
+
+    @property
+    def has_recent_data(self):
+        if self._last_datetime is None:
+            return False
+        age = (datetime.now(timezone.utc) - self._last_datetime).total_seconds()
+        return 0 <= age <= 300
+
+    @property
+    def is_disconnected(self):
+        return self._last_datetime is not None and not self.has_recent_data
 
     def update(self, last_state):
         """
@@ -124,6 +150,16 @@ class Paraglider:
             f"Speed={self._speed*3.6:.2f} km/h, Avg Speed={self._avg_speed*3.6:.2f} km/h"
         )
 
+        if not self.has_recent_data:
+            if self._last_datetime is None:
+                self._logger.warning(f"No timestamp available yet for {self.name}; skipping state check.")
+                return
+            if self.state == 'Unknown':
+                self.check()
+            elif self.state in {'Flying', 'Landed'}:
+                self.disconnected()
+            return
+
         # Adjust the state based on the updated values
         if self._avg_speed > 16.67: # 60km/h or 16,67m/s
             self.highSpeed()
@@ -132,16 +168,10 @@ class Paraglider:
         elif (self._avg_speed < 0.56) and (self._altitude_gnd_calc < 60): # 2km/h or 0,56m/s
             self.nullSpeed()
 
-        if self._last_datetime is None:
-            self._logger.warning(f"No timestamp available yet for {self.name}; skipping disconnect check.")
-            return
+        if self.state == 'Unknown' and self._last_datetime is not None:
+            self.check()
 
-        time_difference = (datetime.now(timezone.utc) - self._last_datetime).total_seconds()
-        if time_difference > 300:  # 5 minutes
-            self._logger.warning(f"Disconnected for too long. Last seen at {self._last_datetime}.")
-            self.disconnected()
-        else:
-            self.connected()
+        self.connected()
 
 
     def arm_timer(self, duration):

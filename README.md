@@ -36,6 +36,7 @@ It supports:
 
 * asynchronous monitoring without blocking the Discord client;
 * Discord notifications in the configured alert channel;
+* surveillance startup and shutdown notifications in the configured alert channel;
 * optional delivery of the same landing-confirmation message both to the
     supervisor alert channel and directly to the paraglider by Discord DM;
 * landing confirmation replies from a configured Discord user;
@@ -151,9 +152,10 @@ state Root {
 
     [*] --> Unknown
 
-    note right of Unknown : Requires checking
+    note right of Root : At startup, restore the last persisted state when available
+
     state Unknown {
-        Unknown : entry()
+        Unknown : entry() / check()
     }
 
     state Flying {
@@ -181,12 +183,14 @@ state Root {
     Clearance -> Alert : timeout()
     Disconnected --> Unknown : connected()
     Disconnected --> Alert : timeout()
+    Unknown --> Alert : timeout()
     Flying --> Clearance : nullSpeed()
     Flying --> Alert : highSpeed()
     Flying --> Disconnected : disconnected()
     Landed --> Flying : flying()
-    Unknown --> Flying : [isFlying()]
-    Unknown --> Clearance : [!isFlying()]
+    Unknown --> Flying : update(last_state) / check()\n[isFlying()]
+    Unknown --> Disconnected : update(last_state) / check()\n[isDisconnected()]
+    Unknown --> Landed : update(last_state) / check()\n[hasRecentData() && !isFlying()]
 }
 
 @enduml
