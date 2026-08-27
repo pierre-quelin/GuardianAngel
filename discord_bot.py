@@ -35,7 +35,7 @@ class DiscordBot(commands.Bot):
             "👎 = I need assistance or I am not safe."
         )
         self.msg_waiting_landing_confirmation = self.msg_confirmation_instructions
-        self.msg_bye = "✅ Thank you. Your response has been recorded."
+        self.msg_bye = "✅ Thank you {mention}. Your response has been recorded."
         self.msg_negative_response = (
             "🚨 Your response indicates that you need assistance or are not safe. "
             "The alert remains active. The guardian has been notified."
@@ -246,7 +246,10 @@ class DiscordBot(commands.Bot):
 
     async def post_bye(self, discord_id):
         self.logger.info(f"post_bye discord_id {discord_id}")
-        await self.post_message_to_channel(self.channel_id, f"<@{discord_id}> " + self.msg_bye)
+        await self.post_message_to_channel(
+            self.channel_id,
+            self.msg_bye.format(mention=f"<@{discord_id}>"),
+        )
 
     async def post_negative_acknowledgment(self, discord_id):
         self.logger.info(f"post_negative_acknowledgment discord_id {discord_id}")

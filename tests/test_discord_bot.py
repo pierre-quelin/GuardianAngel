@@ -74,6 +74,26 @@ async def test_landing_confirmation_message_is_registered():
 
 
 @pytest.mark.asyncio
+async def test_bye_message_places_mention_after_checkmark():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    bot.channel_id = 55
+    bot.msg_bye = '✅ Thank you {mention}. Your response has been recorded.'
+    sent_messages = []
+
+    async def post_message_to_channel(channel_id, message):
+        sent_messages.append((channel_id, message))
+
+    bot.post_message_to_channel = post_message_to_channel
+
+    await bot.post_bye(7)
+
+    assert sent_messages == [
+        (55, '✅ Thank you <@7>. Your response has been recorded.'),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_alert_confirmation_places_mention_before_instructions():
     bot = DiscordBot.__new__(DiscordBot)
     bot.logger = get_logger('test')
