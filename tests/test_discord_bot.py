@@ -160,6 +160,35 @@ async def test_raw_reaction_confirms_pending_landing():
 
 
 @pytest.mark.asyncio
+async def test_invalid_reaction_gets_response_and_keeps_new_message_linked():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=42))
+    bot.logger = get_logger('test')
+    bot.channel_id = 55
+    bot.msg_unrecognized_response = '⚠️ {mention}, response not recognized.'
+    confirmation = {'discord_id': 7, 'paraglider_key': 'X-pilot'}
+    bot.landing_to_be_confirmed = {100: confirmation}
+    bot._cleanup_expired_confirmations = lambda: None
+    sent_messages = []
+
+    async def post_message_to_channel(channel_id, message):
+        sent_messages.append((channel_id, message))
+        return 101
+
+    bot.post_message_to_channel = post_message_to_channel
+
+    await bot.on_raw_reaction_add(SimpleNamespace(
+        user_id=7,
+        message_id=100,
+        emoji='❓',
+    ))
+
+    assert sent_messages == [(55, '⚠️ <@7>, response not recognized.')]
+    assert bot.landing_to_be_confirmed[100] is confirmation
+    assert bot.landing_to_be_confirmed[101] is confirmation
+
+
+@pytest.mark.asyncio
 async def test_thumbs_down_rejects_confirmation_without_replying_bye():
     bot = DiscordBot.__new__(DiscordBot)
     bot._connection = SimpleNamespace(user=SimpleNamespace(id=42))
