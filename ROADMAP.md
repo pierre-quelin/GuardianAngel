@@ -11,6 +11,8 @@ superviseurs et les parapentistes via Discord.
 - [x] Boucle de monitoring compatible avec `asyncio`.
 - [x] Appels PureTrack bloquants exécutés hors de la boucle asyncio.
 - [x] Envoi de notifications dans le canal Discord général.
+- [x] Notification du démarrage et de l'arrêt de la surveillance dans Discord.
+- [x] Confirmation Discord ciblée des alertes par le parapentiste.
 - [x] Envoi optionnel du même message en DM au parapentiste.
 - [x] Réception des réponses texte et des réactions Discord.
 - [x] Gestion des réactions avec et sans message présent dans le cache Discord.
@@ -24,6 +26,9 @@ superviseurs et les parapentistes via Discord.
 - [x] Nettoyage des tâches asyncio et des timers de la machine d'état.
 - [x] Tests de régression et tests d'intégration hors réseau.
 - [x] Configuration exemple sans données sensibles.
+- [x] Reprendre sans clearance un pilote déjà posé après un redémarrage.
+- [x] Restaurer de façon sûre un état de vol ou une perte de signal après un crash.
+- [x] Maintenir le diagramme PlantUML du README synchronisé avec l'automate.
 
 ## Prochaines étapes prioritaires
 
@@ -32,7 +37,8 @@ superviseurs et les parapentistes via Discord.
 - [ ] Définir les règles métier pour distinguer vol, marche, auto-stop,
 	pause normale et pause suspecte.
 - [ ] Détecter une vitesse nulle pendant une durée configurable.
-- [ ] Détecter une perte de signal ou l'absence de rapport PureTrack.
+- [x] Détecter une perte de signal ou l'absence de rapport PureTrack.
+- [x] Conserver l'état `Unknown` tant qu'aucune donnée PureTrack récente n'est disponible.
 - [ ] Utiliser la hauteur au-dessus du sol dans les décisions.
 - [ ] Ignorer ou signaler les points PureTrack aberrants.
 - [ ] Implémenter la règle de pause suspecte : absence de déplacement pendant
@@ -53,6 +59,7 @@ superviseurs et les parapentistes via Discord.
 - [ ] Définir les messages d'alerte destinés aux superviseurs.
 - [ ] Ajouter téléphone et e-mail dans les alertes lorsque disponibles.
 - [ ] Gérer explicitement une réponse négative.
+- [x] Gérer explicitement une réponse négative.
 - [ ] Gérer l'expiration et le renouvellement des confirmations.
 - [ ] Gérer les erreurs Discord et les limitations de débit.
 - [ ] Ajouter une stratégie de reprise après perte de connexion Discord.

@@ -78,6 +78,11 @@ class GuardianAngel:
         paraglider.alert.connect(self.on_alert, weak=False)
         paraglider.clearance.connect(self.on_clearance, weak=False)
         paraglider.initialize()
+        session = db.SessionLocal()
+        last_state = db.get_last_paraglider_state(session, paraglider.puretrack_key)
+        if last_state is not None:
+            paraglider.restore_state(last_state.state)
+        session.close()
         paraglider.enable_signals()
 
         self.logger.info(f"Paraglider {paraglider.name} added.")
@@ -161,6 +166,11 @@ class GuardianAngel:
             except asyncio.CancelledError:
                 pass
             self._confirmation_task = None
+        if self.discord_bot is not None and hasattr(self.discord_bot, 'send_shutdown_message'):
+            try:
+                await self.discord_bot.send_shutdown_message()
+            except Exception as exc:
+                self.logger.exception("Failed to send Discord shutdown message: %s", exc)
         if self._discord_task is not None:
             self._discord_task.cancel()
             try:
@@ -217,14 +227,22 @@ class GuardianAngel:
                             )
                             contacts = []
                             if paraglider.phone_number:
-                                contacts.append(f"Téléphone: {paraglider.phone_number}")
+                                contacts.append(f"Phone: {paraglider.phone_number}")
                             if paraglider.email:
-                                contacts.append(f"E-mail: {paraglider.email}")
+                                contacts.append(f"Email: {paraglider.email}")
                             if contacts:
                                 message += "\n" + " | ".join(contacts)
                         else:
                             message = f"Alert for {payload.get('name')}"
-                        await self.discord_bot.send_message_async(message)
+                        if paraglider is not None and paraglider.discord_id:
+                            await self.discord_bot.post_waiting_landing_confirmation(
+                                paraglider.discord_id,
+                                message,
+                                paraglider.puretrack_key,
+                                mention_first=False,
+                            )
+                        else:
+                            await self.discord_bot.send_message_async(message)
                     except Exception as exc:
                         self.logger.exception("Failed to send alert Discord message: %s", exc)
             elif event_type == 'clearance':
@@ -333,6 +351,7 @@ class GuardianAngel:
                 'speed': last_state.speed,
                 'avg_speed': db.calculate_average_speed(session, paraglider.puretrack_key, minutes=5),
             })
+            db.update_last_paraglider_state(session, paraglider.puretrack_key, paraglider.state)
         self.logger.info("Paraglider %s / %s state: %s", paraglider.name, paraglider.puretrack_key, paraglider.state)
         self._queue_state_event_if_changed(paraglider)
 

@@ -93,6 +93,13 @@ def get_last_paraglider_state(session, paraglider_key):
 
     return last_state
 
+def update_last_paraglider_state(session: Session, paraglider_key, state):
+    """Persist the current state on the latest tracking record."""
+    last_state = get_last_paraglider_state(session, paraglider_key)
+    if last_state is not None:
+        last_state.state = state
+        session.commit()
+
 def get_paraglider_history(paraglider_key):
     """
     Get the history of a paraglider.
