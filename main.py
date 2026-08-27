@@ -1,4 +1,5 @@
 import asyncio
+import signal
 import sys
 
 from config import Config
@@ -77,11 +78,26 @@ async def main():
         return
 
     await angel.start_monitoring(period=30)
+    shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def request_shutdown():
+        logger.info("Shutdown signal received")
+        shutdown_event.set()
+
+    registered_signals = []
+    for shutdown_signal in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(shutdown_signal, request_shutdown)
+            registered_signals.append(shutdown_signal)
+        except (NotImplementedError, RuntimeError):
+            logger.warning("Unable to register handler for signal %s", shutdown_signal)
 
     try:
-        while True:
-            await asyncio.sleep(60)
+        await shutdown_event.wait()
     finally:
+        for shutdown_signal in registered_signals:
+            loop.remove_signal_handler(shutdown_signal)
         await angel.stop_monitoring()
 
 
