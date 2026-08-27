@@ -35,14 +35,14 @@ class DiscordBot(commands.Bot):
             "👎 = I need assistance or I am not safe."
         )
         self.msg_waiting_landing_confirmation = self.msg_confirmation_instructions
-        self.msg_bye = "✅ Thank you. Your response has been recorded."
+        self.msg_bye = "✅ Thank you {mention}. Your response has been recorded."
         self.msg_negative_response = (
             "🚨 Your response indicates that you need assistance or are not safe. "
             "The alert remains active. The guardian has been notified."
         )
         self.msg_not_addressed = "This message was not addressed to you."
         self.msg_unrecognized_response = (
-            "⚠️ Response not recognized. Please reply with 👍 if you are safe and have landed, "
+            "⚠️ {mention}, response not recognized. Please reply with 👍 if you are safe and have landed, "
             "or 👎 if you need assistance or are not safe."
         )
 
@@ -108,9 +108,9 @@ class DiscordBot(commands.Bot):
                             del self.landing_to_be_confirmed[ref_message.id]
                         else:
                             if self.channel_id is not None:
-                                await self.post_message_to_channel(
-                                    self.channel_id,
-                                    self.msg_unrecognized_response,
+                                await self._post_unrecognized_response(
+                                    message.author.id,
+                                    confirmation,
                                 )
                     else:
                         await self.post_not_addressed(message.author.id)
@@ -144,6 +144,8 @@ class DiscordBot(commands.Bot):
             await self.post_not_addressed(user_id)
             return
         if emoji not in {"👍", "👌", "👎"}:
+            if self.channel_id is not None:
+                await self._post_unrecognized_response(user_id, confirmation)
             return
 
         is_positive = emoji in {"👍", "👌"}
@@ -163,7 +165,20 @@ class DiscordBot(commands.Bot):
             await self.post_bye(user_id)
         else:
             await self.post_negative_acknowledgment(user_id)
-        self.landing_to_be_confirmed.pop(message_id, None)
+        self._remove_confirmation(confirmation)
+
+    async def _post_unrecognized_response(self, discord_id, confirmation):
+        message_id = await self.post_message_to_channel(
+            self.channel_id,
+            self.msg_unrecognized_response.format(mention=f"<@{discord_id}>"),
+        )
+        if message_id is not None:
+            self.landing_to_be_confirmed[message_id] = confirmation
+
+    def _remove_confirmation(self, confirmation):
+        for message_id, entry in list(self.landing_to_be_confirmed.items()):
+            if entry is confirmation:
+                del self.landing_to_be_confirmed[message_id]
 
     async def post_message_to_channel(self, channel_id, message):
         """Post a message to a specific channel."""
@@ -246,7 +261,10 @@ class DiscordBot(commands.Bot):
 
     async def post_bye(self, discord_id):
         self.logger.info(f"post_bye discord_id {discord_id}")
-        await self.post_message_to_channel(self.channel_id, f"<@{discord_id}> " + self.msg_bye)
+        await self.post_message_to_channel(
+            self.channel_id,
+            self.msg_bye.format(mention=f"<@{discord_id}>"),
+        )
 
     async def post_negative_acknowledgment(self, discord_id):
         self.logger.info(f"post_negative_acknowledgment discord_id {discord_id}")
