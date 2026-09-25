@@ -1,7 +1,7 @@
 from blinker import signal
 from transitions import Machine
 from logger import get_logger
-import threading
+import asyncio
 from datetime import datetime, timezone
 
 class Paraglider:
@@ -36,6 +36,7 @@ class Paraglider:
             on_exception='ignore',
         )
         self._timer = None
+        self._pending_timer_duration = None
         self.alert = signal('alert')
         self.clearance = signal('clearance')
 
@@ -113,6 +114,9 @@ class Paraglider:
         self._logger.warning(f"Exit action for Alert state for {self.name}")
         self.cancel_timer()
 
+    def on_exit_Disconnected(self):
+        self.cancel_timer()
+
     @property
     def is_flying(self):
         return self.has_recent_data and self._avg_speed > 2.78
@@ -175,19 +179,38 @@ class Paraglider:
 
 
     def arm_timer(self, duration):
+        """Schedule a timeout on the running asyncio loop (thread-safe with the state machine)."""
         self.cancel_timer()
-        self._timer = threading.Timer(duration, self._timer_expired)
-        self._timer.daemon = True
-        self._timer.start()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop yet (e.g. sync unit tests); schedule when a loop is available.
+            self._pending_timer_duration = duration
+            return
 
-    def _timer_expired(self):
+        self._pending_timer_duration = None
+        self._timer = loop.create_task(self._timer_coro(duration))
+
+    async def _timer_coro(self, duration):
+        try:
+            await asyncio.sleep(duration)
+        except asyncio.CancelledError:
+            raise
         if not self._cleaned_up:
             self.timeout()
 
     def cancel_timer(self):
+        self._pending_timer_duration = None
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
+
+    def schedule_pending_timer(self):
+        """Arm any timer that was deferred because no event loop was running."""
+        if self._pending_timer_duration is not None and self._timer is None and not self._cleaned_up:
+            duration = self._pending_timer_duration
+            self._pending_timer_duration = None
+            self.arm_timer(duration)
 
     def enable_signals(self):
         if not self._initialization_completed:

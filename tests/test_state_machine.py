@@ -201,7 +201,10 @@ async def test_start_monitoring_uses_discord_configuration(monkeypatch):
     angel._discord_task = None
     angel._confirmation_task = None
     angel.discord_bot = None
+    angel._paragliders = []
+    angel._fetch_remote_group_requested = False
     angel.puretrack_site_cfg = {'group': 'test-group'}
+    angel.puretrack_grp = 'test-group'
     angel.discord_bot_cfg = {'bot_token': 'token', 'channel_id': 123}
     angel._event_queue = asyncio.Queue()
 
@@ -234,7 +237,9 @@ async def test_start_monitoring_uses_discord_configuration(monkeypatch):
     await asyncio.sleep(0.01)
     await angel.stop_monitoring()
 
-    assert created['cfg'] == angel.discord_bot_cfg
+    assert created['cfg']['bot_token'] == 'token'
+    assert created['cfg']['channel_id'] == 123
+    assert created['cfg']['puretrack_group'] == 'test-group'
 
 
 @pytest.mark.asyncio
@@ -268,9 +273,200 @@ async def test_alert_confirmation_targets_the_paraglider():
 
     task = asyncio.create_task(angel._process_events())
     await angel._event_queue.put({'type': 'alert', 'payload': {'name': 'Pilot'}})
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.05)
     angel._stop_monitoring.set()
     await task
 
     assert targeted == [(123, '⚠️ Alert for [Pilot](https://puretrack.io/?l=44.91038,5.19237&z=15&group=test-group&k=X-pilot)', 'X-pilot', False)]
     assert plain == []
+
+
+@pytest.mark.asyncio
+async def test_asyncio_timer_triggers_timeout_on_event_loop():
+    cfg = {
+        'name': 'Timer Pilot',
+        'puretrack_key': 'timer-key',
+        'discord_id': 1,
+        'phone_number': '',
+        'email': '',
+    }
+    paraglider = Paraglider(cfg, emit_signals=False, initialize=False)
+    paraglider._run_initialization()
+    paraglider.cancel_timer()
+    assert paraglider.state == 'Unknown'
+
+    paraglider.arm_timer(0.05)
+    await asyncio.sleep(0.15)
+
+    assert paraglider.state == 'Alert'
+    paraglider.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_asyncio_timer_does_not_fire():
+    cfg = {
+        'name': 'Cancel Pilot',
+        'puretrack_key': 'cancel-key',
+        'discord_id': 1,
+        'phone_number': '',
+        'email': '',
+    }
+    paraglider = Paraglider(cfg, emit_signals=False, initialize=False)
+    paraglider._run_initialization()
+    paraglider.cancel_timer()
+    paraglider.arm_timer(0.2)
+    paraglider.cancel_timer()
+    await asyncio.sleep(0.3)
+
+    assert paraglider.state == 'Unknown'
+    paraglider.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_timer_and_update_share_the_same_event_loop():
+    cfg = {
+        'name': 'Race Pilot',
+        'puretrack_key': 'race-key',
+        'discord_id': 1,
+        'phone_number': '',
+        'email': '',
+    }
+    paraglider = Paraglider(cfg, emit_signals=False, initialize=False)
+    paraglider._run_initialization()
+    paraglider.cancel_timer()
+
+    paraglider.update({
+        'datetime': datetime.now(timezone.utc),
+        'coordinates': (0.0, 0.0),
+        'course': 0.0,
+        'altitude_gnd_calc': 100.0,
+        'speed': 3.0,
+        'avg_speed': 3.0,
+    })
+    assert paraglider.state == 'Flying'
+
+    paraglider.arm_timer(0.2)
+    paraglider.update({
+        'datetime': datetime.now(timezone.utc),
+        'coordinates': (0.0, 0.0),
+        'course': 0.0,
+        'altitude_gnd_calc': 10.0,
+        'speed': 0.1,
+        'avg_speed': 0.1,
+    })
+    assert paraglider.state == 'Clearance'
+
+    await asyncio.sleep(0.05)
+    assert paraglider.state in {'Clearance', 'Alert', 'Landed', 'Flying'}
+    paraglider.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_start_monitoring_awaits_previous_monitor_task():
+    angel = GuardianAngel.__new__(GuardianAngel)
+    angel.logger = get_logger('test')
+    angel._stop_monitoring = asyncio.Event()
+    angel._event_task = None
+    angel._discord_task = None
+    angel._confirmation_task = None
+    angel.discord_bot = SimpleNamespace()
+    angel.discord_bot_cfg = None
+    angel._paragliders = []
+    angel._fetch_remote_group_requested = False
+    angel._event_queue = asyncio.Queue()
+
+    finished = asyncio.Event()
+
+    async def long_monitor(period):
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            finished.set()
+            raise
+
+    angel._monitor_loop = MethodType(lambda self, period: long_monitor(period), angel)
+    angel._monitor_task = asyncio.create_task(long_monitor(0.01))
+    await asyncio.sleep(0)
+
+    await angel.start_monitoring(period=0.01)
+    assert finished.is_set()
+    await angel.stop_monitoring()
+
+
+@pytest.mark.asyncio
+async def test_landing_rejected_escalates_supervisor_alert():
+    angel = GuardianAngel.__new__(GuardianAngel)
+    angel.logger = get_logger('test')
+    angel._event_queue = asyncio.Queue()
+    angel._last_seen_state = {}
+    angel._paragliders = []
+
+    paraglider = Paraglider({
+        'name': 'Pilot',
+        'puretrack_key': 'X-pilot',
+        'discord_id': 7,
+        'phone_number': '',
+        'email': '',
+    }, emit_signals=False, initialize=False)
+    paraglider._run_initialization()
+    paraglider.cancel_timer()
+    paraglider.restore_state('Alert')
+    angel._paragliders.append(paraglider)
+    angel._last_seen_state['X-pilot'] = 'Alert'
+
+    angel._apply_confirmation_event({
+        'type': 'landing_rejected',
+        'discord_id': 7,
+        'paraglider_key': 'X-pilot',
+    })
+
+    assert paraglider.state == 'Alert'
+    event = angel._event_queue.get_nowait()
+    assert event['type'] == 'alert'
+    assert event['payload']['reason'] == 'assistance_requested'
+    paraglider.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_assistance_alert_sends_plain_supervisor_message():
+    angel = GuardianAngel.__new__(GuardianAngel)
+    angel.logger = get_logger('test')
+    angel._stop_monitoring = asyncio.Event()
+    angel._event_queue = asyncio.Queue()
+    angel._replay = SimpleNamespace(record=lambda event: None)
+    angel.puretrack_grp = 'test-group'
+    paraglider = SimpleNamespace(
+        name='Pilot',
+        discord_id=123,
+        puretrack_key='X-pilot',
+        phone_number='',
+        email='',
+    )
+    angel._paragliders = [paraglider]
+    angel.discord_bot = SimpleNamespace()
+    targeted = []
+    plain = []
+
+    async def post_confirmation(*args, **kwargs):
+        targeted.append(args)
+
+    async def send_message(message):
+        plain.append(message)
+
+    angel.discord_bot.post_waiting_landing_confirmation = post_confirmation
+    angel.discord_bot.send_message_async = send_message
+
+    task = asyncio.create_task(angel._process_events())
+    await angel._event_queue.put({
+        'type': 'alert',
+        'payload': {'name': 'Pilot', 'reason': 'assistance_requested'},
+    })
+    await asyncio.sleep(0.05)
+    angel._stop_monitoring.set()
+    await task
+
+    assert targeted == []
+    assert plain == [
+        '🚨 Assistance requested for [Pilot]'
+        '(https://puretrack.io/?l=44.91038,5.19237&z=15&group=test-group&k=X-pilot)'
+    ]

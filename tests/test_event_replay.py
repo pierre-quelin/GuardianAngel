@@ -84,6 +84,54 @@ async def test_replay_applies_captured_puretrack_event(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_replay_and_live_tracking_share_persist_pipeline(tmp_path, monkeypatch):
+    db.init_db_engine({'url': f'sqlite:///{tmp_path / "shared.db"}'})
+    response = {
+        'tracks': [{
+            'count': 1,
+            'last': 'T1782500000,L45.0,G5.0,A500,C90,S0,V0,g400',
+            'points': ['T1782499990,L45.0,G5.0,A500,C90,S0,V0,g400'],
+        }],
+    }
+
+    def make_angel(name, key):
+        angel = GuardianAngel.__new__(GuardianAngel)
+        angel.logger = get_logger(name)
+        angel._paragliders = []
+        angel._event_queue = asyncio.Queue()
+        angel._last_seen_state = {}
+        angel._capture_replay = None
+        paraglider = Paraglider({
+            'name': name,
+            'puretrack_key': key,
+            'discord_id': 0,
+            'phone_number': '',
+            'email': '',
+        }, emit_signals=False, initialize=False)
+        paraglider._run_initialization()
+        angel._paragliders.append(paraglider)
+        return angel, paraglider
+
+    live_angel, live_pilot = make_angel('Live', 'X-live')
+    replay_angel, replay_pilot = make_angel('Replay', 'X-replay')
+
+    async def fake_tails(key, limit=10):
+        return response
+
+    monkeypatch.setattr('guardian_angel.ptrk.get_puretrack_tails_async', fake_tails)
+
+    await live_angel.update_states_from_tracking(30)
+    await replay_angel.process_replay_event({
+        'type': 'puretrack',
+        'payload': {'key': 'X-replay', 'response': response},
+    })
+
+    assert live_pilot.state == replay_pilot.state == 'Disconnected'
+    live_pilot.cleanup()
+    replay_pilot.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_replay_raises_when_file_missing():
     missing_path = 'data/does_not_exist.json'
     if os.path.exists(missing_path):

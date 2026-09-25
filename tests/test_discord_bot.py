@@ -260,3 +260,138 @@ async def test_negative_text_rejects_confirmation_and_sends_acknowledgment():
     assert event['type'] == 'landing_rejected'
     assert acknowledgments == [7]
     assert 100 not in bot.landing_to_be_confirmed
+
+
+@pytest.mark.asyncio
+async def test_confirmation_ttl_cleanup_runs_on_text_reply_path():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot_user = SimpleNamespace(id=42)
+    bot._connection = SimpleNamespace(user=bot_user)
+    bot.logger = get_logger('test')
+    bot.channel_id = 55
+    bot._pending_confirmation_ttl = 1
+    bot.landing_to_be_confirmed = {
+        100: {
+            'discord_id': 7,
+            'paraglider_key': 'X-pilot',
+            'created_at': asyncio.get_running_loop().time() - 10,
+        },
+    }
+    bot._pending_confirmation_events = asyncio.Queue()
+
+    async def process_commands(message):
+        return None
+
+    bot.process_commands = process_commands
+
+    await bot.on_message(SimpleNamespace(
+        author=SimpleNamespace(id=7, name='Pilot'),
+        content='yes',
+        reference=SimpleNamespace(
+            resolved=SimpleNamespace(id=100, author=bot_user),
+        ),
+    ))
+
+    assert bot._pending_confirmation_events.empty()
+    assert 100 not in bot.landing_to_be_confirmed
+
+
+@pytest.mark.asyncio
+async def test_two_pending_confirmations_both_get_bye_on_thumbs_up():
+    """First ack must not wipe the second pilot's pending confirmation."""
+    bot = DiscordBot.__new__(DiscordBot)
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=42))
+    bot.logger = get_logger('test')
+    bot.channel_id = 55
+    bot._pending_confirmation_ttl = 300
+    first = {
+        'discord_id': 7,
+        'paraglider_key': 'X-first',
+        'created_at': asyncio.get_running_loop().time(),
+        'message_ids': {100},
+    }
+    second = {
+        'discord_id': 8,
+        'paraglider_key': 'X-second',
+        'created_at': asyncio.get_running_loop().time(),
+        'message_ids': {101},
+    }
+    bot.landing_to_be_confirmed = {100: first, 101: second}
+    bot._pending_confirmation_events = asyncio.Queue()
+    bot._cleanup_expired_confirmations = lambda: None
+    byes = []
+
+    async def post_bye(discord_id):
+        byes.append(discord_id)
+
+    bot.post_bye = post_bye
+
+    await bot.on_raw_reaction_add(SimpleNamespace(
+        user_id=7,
+        message_id=100,
+        emoji='👍',
+    ))
+    await bot.on_raw_reaction_add(SimpleNamespace(
+        user_id=8,
+        message_id=101,
+        emoji='👍',
+    ))
+
+    events = [
+        await bot._pending_confirmation_events.get(),
+        await bot._pending_confirmation_events.get(),
+    ]
+    assert byes == [7, 8]
+    assert [event['paraglider_key'] for event in events] == ['X-first', 'X-second']
+    assert bot.landing_to_be_confirmed == {}
+
+
+@pytest.mark.asyncio
+async def test_thumbs_up_with_skin_tone_is_accepted():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=42))
+    bot.logger = get_logger('test')
+    bot.landing_to_be_confirmed = {
+        100: {
+            'discord_id': '7',
+            'paraglider_key': 'X-pilot',
+            'created_at': asyncio.get_running_loop().time(),
+            'message_ids': {100},
+        },
+    }
+    bot._pending_confirmation_events = asyncio.Queue()
+    bot._cleanup_expired_confirmations = lambda: None
+    byes = []
+
+    async def post_bye(discord_id):
+        byes.append(discord_id)
+
+    bot.post_bye = post_bye
+
+    await bot.on_raw_reaction_add(SimpleNamespace(
+        user_id=7,
+        message_id=100,
+        emoji='👍🏻',
+    ))
+
+    event = await bot._pending_confirmation_events.get()
+    assert event['type'] == 'landing_confirmed'
+    assert event['discord_id'] == 7
+    assert byes == [7]
+
+
+@pytest.mark.asyncio
+async def test_check_command_uses_bot_puretrack_group():
+    sent = []
+
+    class FakeCtx:
+        bot = SimpleNamespace(puretrack_grp='batouchoncel')
+
+        async def send(self, message):
+            sent.append(message)
+
+    from discord_bot import check
+
+    await check.callback(FakeCtx(), member=SimpleNamespace(mention='@Pilot'))
+
+    assert 'group=batouchoncel' in sent[0]
