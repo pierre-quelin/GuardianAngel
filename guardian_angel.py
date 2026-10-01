@@ -294,9 +294,16 @@ class GuardianAngel:
                                 message,
                                 paraglider.puretrack_key,
                                 mention_first=False,
+                                notification_type='alert',
                             )
                         else:
-                            await self.discord_bot.send_message_async(message)
+                            notification_type = (
+                                'assistance' if reason == 'assistance_requested' else 'alert'
+                            )
+                            await self.discord_bot.send_message_async(
+                                message,
+                                notification_type=notification_type,
+                            )
                     except Exception as exc:
                         self.logger.exception("Failed to send alert Discord message: %s", exc)
             elif event_type == 'clearance':
@@ -322,9 +329,13 @@ class GuardianAngel:
                                 paraglider.discord_id,
                                 message,
                                 paraglider.puretrack_key,
+                                notification_type='clearance',
                             )
                         else:
-                            await self.discord_bot.send_message_async(message)
+                            await self.discord_bot.send_message_async(
+                                message,
+                                notification_type='clearance',
+                            )
                     except Exception as exc:
                         self.logger.exception("Failed to send clearance Discord message: %s", exc)
 
@@ -474,6 +485,10 @@ class GuardianAngel:
             return True
         return False
 
+    def _queue_alert_occurrence(self, paraglider):
+        self._last_seen_state[paraglider.puretrack_key] = paraglider.state
+        self._enqueue_event({'type': 'alert', 'payload': {'name': paraglider.name}})
+
     def update_state_from_discord(self, name, message):
         paraglider = self.get_paraglider(name)
         if paraglider is not None:
@@ -496,7 +511,7 @@ class GuardianAngel:
         self._event_queue.put_nowait(event)
     def on_alert(self, sender, message):
         self.logger.info(f"Alert signal received from {sender.name}")
-        self._queue_state_event_if_changed(sender)
+        self._queue_alert_occurrence(sender)
 
     def on_clearance(self, sender, message):
         self.logger.info(f"Clearance signal received from {sender.name} : discord_id {sender.discord_id}")

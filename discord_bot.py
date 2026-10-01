@@ -6,6 +6,14 @@ from discord.ext import commands
 from logger import get_logger
 
 class DiscordBot(commands.Bot):
+    _NOTIFICATION_STYLES = {
+        'startup': ('GUARDIAN ANGEL ONLINE', 0x7F8C8D),
+        'shutdown': ('GUARDIAN ANGEL OFFLINE', 0x7F8C8D),
+        'clearance': ('LANDING CHECK', 0x2ECC71),
+        'alert': ('ALERT - NO RESPONSE', 0xD97706),
+        'assistance': ('ASSISTANCE REQUESTED', 0xC0392B),
+    }
+
     def __init__(self, cfg):
         """
         Initialize the Discord bot.
@@ -82,6 +90,8 @@ class DiscordBot(commands.Bot):
         return text
 
     def _register_confirmation_message(self, message_id, confirmation):
+        if confirmation.get('completed'):
+            return
         self.landing_to_be_confirmed[message_id] = confirmation
         confirmation.setdefault("message_ids", set()).add(message_id)
 
@@ -94,6 +104,7 @@ class DiscordBot(commands.Bot):
         for message_id in message_ids:
             self.landing_to_be_confirmed.pop(message_id, None)
         confirmation["message_ids"] = set()
+        confirmation['completed'] = True
 
     @property
     def pending_confirmation_events(self):
@@ -106,7 +117,7 @@ class DiscordBot(commands.Bot):
         if self._ttl_cleanup_task is None or self._ttl_cleanup_task.done():
             self._ttl_cleanup_task = asyncio.create_task(self._ttl_cleanup_loop())
         if not self._startup_message_sent:
-            await self.send_message_async(self.msg_hello)
+            await self.send_message_async(self.msg_hello, notification_type='startup')
             self._startup_message_sent = True
 
     async def _ttl_cleanup_loop(self):
@@ -120,7 +131,7 @@ class DiscordBot(commands.Bot):
     async def send_shutdown_message(self):
         if self._shutdown_message_sent or not self.is_ready():
             return None
-        message_id = await self.send_message_async(self.msg_good_bye)
+        message_id = await self.send_message_async(self.msg_good_bye, notification_type='shutdown')
         self._shutdown_message_sent = True
         return message_id
 
@@ -241,11 +252,19 @@ class DiscordBot(commands.Bot):
         if message_id is not None:
             self._register_confirmation_message(message_id, confirmation)
 
-    async def _send_channel_message(self, channel, message):
+    @classmethod
+    def _make_notification_embed(cls, notification_type, description):
+        title, color = cls._NOTIFICATION_STYLES[notification_type]
+        return discord.Embed(title=title, description=description or None, color=color)
+
+    async def _send_channel_message(self, channel, message, embed=None):
         last_error = None
         for attempt in range(self._send_max_retries):
             try:
-                msg = await channel.send(message)
+                if embed is None:
+                    msg = await channel.send(message)
+                else:
+                    msg = await channel.send(message, embed=embed)
                 self.logger.info(f"Message '{message}' posted to channel {channel.id}")
                 return msg.id
             except discord.HTTPException as exc:
@@ -275,7 +294,7 @@ class DiscordBot(commands.Bot):
         )
         return None
 
-    async def post_message_to_channel(self, channel_id, message):
+    async def post_message_to_channel(self, channel_id, message, embed=None):
         """Post a message to a specific channel with rate-limit retries."""
         channel = self.get_channel(channel_id)
         if channel is None:
@@ -285,11 +304,13 @@ class DiscordBot(commands.Bot):
                 self.logger.exception("Unable to fetch Discord channel %s", channel_id)
                 return None
         if channel:
-            return await self._send_channel_message(channel, message)
+            if embed is None:
+                return await self._send_channel_message(channel, message)
+            return await self._send_channel_message(channel, message, embed=embed)
         self.logger.error(f"The channel ID {channel_id} was not found.")
         return None
 
-    async def send_message_async(self, message):
+    async def send_message_async(self, message, notification_type=None):
         """Asynchronously send a message to the configured channel."""
         if self.channel_id is None:
             self.logger.warning("No channel configured for Discord bot")
@@ -300,9 +321,16 @@ class DiscordBot(commands.Bot):
             except asyncio.TimeoutError:
                 self.logger.error("Discord bot did not become ready before sending message")
                 return None
+        embed = (
+            self._make_notification_embed(notification_type, message)
+            if notification_type is not None else None
+        )
+        content = None if embed is not None else message
         self.logger.info("Attempting to post Discord message to channel %s: %s", self.channel_id, message)
         try:
-            return await self.post_message_to_channel(self.channel_id, message)
+            if embed is None:
+                return await self.post_message_to_channel(self.channel_id, content)
+            return await self.post_message_to_channel(self.channel_id, content, embed=embed)
         except Exception as exc:
             self.logger.exception("Discord send failed: %s", exc)
             return None
@@ -310,14 +338,23 @@ class DiscordBot(commands.Bot):
 
 
     async def post_waiting_landing_confirmation(
-        self, discord_id, message=None, paraglider_key=None, mention_first=True
+        self, discord_id, message=None, paraglider_key=None, mention_first=True,
+        notification_type=None,
     ):
         self.logger.info(f"post_waiting_landing_confirmation discord_id {discord_id}")
         self._cleanup_expired_confirmations()
-        content = message or self.msg_waiting_landing_confirmation
-        if message:
-            content = f"{content}\n\n{self.msg_confirmation_instructions}"
-        message_ids = []
+        embed = (
+            self._make_notification_embed(notification_type, message)
+            if notification_type is not None else None
+        )
+        confirmation = {
+            'discord_id': self._normalize_discord_id(discord_id),
+            'paraglider_key': paraglider_key,
+            'created_at': None,
+            'message_ids': set(),
+            'completed': False,
+        }
+        sent_message_ids = []
 
         if self.channel_id is not None:
             if not self.is_ready():
@@ -326,34 +363,76 @@ class DiscordBot(commands.Bot):
                 except asyncio.TimeoutError:
                     self.logger.error("Discord bot did not become ready before sending confirmation")
                     return None
-            if discord_id and message and not mention_first:
-                channel_content = (
-                    f"{message}\n\n<@{discord_id}> {self.msg_confirmation_instructions}"
+            if embed is not None:
+                embed_message_id = await self.post_message_to_channel(
+                    self.channel_id,
+                    None,
+                    embed=embed,
                 )
+                if embed_message_id is not None:
+                    sent_message_ids.append(embed_message_id)
+                    self._register_confirmation_message(embed_message_id, confirmation)
+
+                channel_prompt = (
+                    f"<@{discord_id}> {self.msg_confirmation_instructions}"
+                    if discord_id else self.msg_confirmation_instructions
+                )
+                if embed_message_id is None and message:
+                    channel_prompt = f"{message}\n\n{channel_prompt}"
+                if confirmation['completed']:
+                    channel_message_id = None
+                else:
+                    channel_message_id = await self.post_message_to_channel(
+                        self.channel_id,
+                        channel_prompt,
+                    )
             else:
-                channel_content = f"<@{discord_id}> {content}" if discord_id else content
-            channel_message_id = await self.post_message_to_channel(self.channel_id, channel_content)
+                content = message or self.msg_waiting_landing_confirmation
+                if message:
+                    content = f"{content}\n\n{self.msg_confirmation_instructions}"
+                if discord_id and message and not mention_first:
+                    channel_content = (
+                        f"{message}\n\n<@{discord_id}> {self.msg_confirmation_instructions}"
+                    )
+                else:
+                    channel_content = f"<@{discord_id}> {content}" if discord_id else content
+                channel_message_id = await self.post_message_to_channel(self.channel_id, channel_content)
             if channel_message_id is not None:
-                message_ids.append(channel_message_id)
+                sent_message_ids.append(channel_message_id)
+                self._register_confirmation_message(channel_message_id, confirmation)
 
         if discord_id and getattr(self, 'send_confirmation_dm', False):
             try:
                 user = self.get_user(discord_id) or await self.fetch_user(discord_id)
-                direct_message = await user.send(content)
-                message_ids.append(direct_message.id)
+                if embed is None:
+                    content = message or self.msg_waiting_landing_confirmation
+                    if message:
+                        content = f"{content}\n\n{self.msg_confirmation_instructions}"
+                    direct_message = await user.send(content)
+                    sent_message_ids.append(direct_message.id)
+                    self._register_confirmation_message(direct_message.id, confirmation)
+                else:
+                    try:
+                        embed_message = await user.send(embed=embed)
+                    except discord.DiscordException:
+                        self.logger.exception("Unable to send confirmation embed DM to %s", discord_id)
+                        embed_message = None
+                    if embed_message is not None:
+                        sent_message_ids.append(embed_message.id)
+                        self._register_confirmation_message(embed_message.id, confirmation)
+
+                    if not confirmation['completed']:
+                        dm_prompt = self.msg_confirmation_instructions
+                        if embed_message is None and message:
+                            dm_prompt = f"{message}\n\n{dm_prompt}"
+                        prompt_message = await user.send(dm_prompt)
+                        sent_message_ids.append(prompt_message.id)
+                        self._register_confirmation_message(prompt_message.id, confirmation)
             except discord.DiscordException:
                 self.logger.exception("Unable to send landing confirmation DM to %s", discord_id)
 
-        created_at = asyncio.get_running_loop().time()
-        confirmation = {
-            'discord_id': self._normalize_discord_id(discord_id),
-            'paraglider_key': paraglider_key,
-            'created_at': created_at,
-            'message_ids': set(),
-        }
-        for message_id in message_ids:
-            self._register_confirmation_message(message_id, confirmation)
-        return message_ids[0] if message_ids else None
+        confirmation['created_at'] = asyncio.get_running_loop().time()
+        return sent_message_ids[0] if sent_message_ids else None
 
     async def post_bye(self, discord_id):
         self.logger.info(f"post_bye discord_id {discord_id}")
