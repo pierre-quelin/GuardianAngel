@@ -3,6 +3,7 @@
 /.vscode/
 /data/
 /logs/
+/tests/__pycache__
 /cfg/config.json
 /.project
 /.pydevproject

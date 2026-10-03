@@ -12,10 +12,12 @@ def parse_runtime_options(argv=None):
     replay_mode = '--replay' in args
     dry_run = '--dry-run' in args
     debug = '--debug' in args
+    sync_group = '--sync-group' in args
 
     replay_file = None
     delay = 1.0
     limit = None
+    group_output = 'cfg/group.json'
     for index, arg in enumerate(args):
         if arg == '--replay-file' and index + 1 < len(args):
             replay_file = args[index + 1]
@@ -29,11 +31,15 @@ def parse_runtime_options(argv=None):
                 limit = int(args[index + 1])
             except ValueError:
                 pass
+        elif arg == '--group-file' and index + 1 < len(args):
+            group_output = args[index + 1]
 
     return {
         'replay_mode': replay_mode,
         'dry_run': dry_run,
         'debug': debug,
+        'sync_group': sync_group,
+        'group_output': group_output,
         'replay_file': replay_file,
         'delay': delay,
         'limit': limit,
@@ -49,10 +55,16 @@ async def main():
     if options['debug']:
         logger.info("Debug mode enabled")
 
-    angel = GuardianAngel(
-        cfg.get('guardian_angel'),
-        fetch_remote_group=not options['replay_mode'],
-    )
+    angel = GuardianAngel(cfg.get('guardian_angel'))
+    if options['sync_group']:
+        logger.info("Syncing PureTrack group to %s", options['group_output'])
+        members = await angel.sync_group_from_puretrack(options['group_output'])
+        if members is None:
+            logger.error("Remote group sync failed")
+            return
+        logger.info("Wrote %s members to %s", len(members), options['group_output'])
+        return
+
     if options['replay_mode']:
         logger.info("Replay mode enabled")
         replay = EventReplay(options['replay_file'] or 'data/replay_events.json')
@@ -76,6 +88,9 @@ async def main():
         await angel.stop_monitoring()
         return
 
+    # Same role as the former constructor fetch_remote_group=True:
+    # refresh cfg/group.json from the existing PureTrack group before monitoring.
+    await angel.sync_group_from_puretrack()
     await angel.start_monitoring(period=30)
 
     try:

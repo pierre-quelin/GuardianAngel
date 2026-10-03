@@ -3,6 +3,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import Session
+from sqlalchemy.pool import NullPool
 
 Base = declarative_base()
 SessionLocal = None  # La session sera configurée dynamiquement
@@ -29,7 +30,16 @@ def init_db_engine(cfg):
         cfg (dict): Configuration for the db engine
     """
     global SessionLocal
-    engine = create_engine(cfg.get('url'))
+    url = cfg.get('url')
+    engine_kwargs = {}
+    # SQLite connections are thread-bound by default. GuardianAngel runs DB work
+    # via asyncio.to_thread, so disable the check and avoid pooled reuse across
+    # worker threads (NullPool = one connection per checkout).
+    if url and url.startswith('sqlite'):
+        engine_kwargs['connect_args'] = {'check_same_thread': False}
+        engine_kwargs['poolclass'] = NullPool
+
+    engine = create_engine(url, **engine_kwargs)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
     # Crée les tables si elles n'existent pas

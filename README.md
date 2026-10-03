@@ -150,11 +150,11 @@ To view the diagram, copy the code below into the online tool [PlantUML Online](
 
 [*] --> Root
 
+note right of Root : At startup, restore the last persisted state when available
+
 state Root {
 
     [*] --> Unknown
-
-    note right of Root : At startup, restore the last persisted state when available
 
     state Unknown {
         Unknown : entry() / check()
