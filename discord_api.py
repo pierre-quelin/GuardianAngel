@@ -17,7 +17,7 @@ class DiscordApi:
 
         # Extract configuration
         self.bot_token = cfg.get('bot_token')
-        self.channel_id = cfg.get('channel_id')
+        self.discord_channel_id = cfg.get('discord_channel_id')
 
         # Initialize the message queue
         self.message_queue = Queue()
@@ -59,7 +59,7 @@ class DiscordApi:
         Args:
             message (str): The message to send.
         """
-        url = f'https://discord.com/api/v10/channels/{self.channel_id}/messages'
+        url = f'https://discord.com/api/v10/channels/{self.discord_channel_id}/messages'
         data = {'content': message}
         headers = {
             'Authorization': f'Bot {self.bot_token}',

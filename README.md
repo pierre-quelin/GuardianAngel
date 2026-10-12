@@ -40,7 +40,8 @@ It supports:
 * targeted Discord alert confirmations for the paraglider;
 * optional delivery of the same landing-confirmation message both to the
     supervisor alert channel and directly to the paraglider by Discord DM;
-* landing confirmation replies from a configured Discord user;
+* landing confirmation replies from the targeted pilot or a configured
+    administrator (`guardian_angel.administrators`);
 * confirmation by text reply (`yes`, `I am safe`, `I am safe and have landed`) or by `👍` / `👌` reaction;
 * negative response by text reply (`no`, `I need assistance`, `I am not safe`) or by `👎` reaction;
 * multiple paragliders sharing the same Discord user ID, with each confirmation
@@ -105,7 +106,44 @@ Detect
 
 ## Discord
 
-cf. [discord.py](https://discordpy.readthedocs.io)
+Implemented with [discord.py](https://discordpy.readthedocs.io) (`discord.ext.commands.Bot`, prefix `>`).
+
+**Configuration** (`guardian_angel` in the runtime JSON):
+
+* `administrators` — list of `{ "name", "discord_user_id" }` allowed to acknowledge
+  any pending clearance/alert confirmation (in addition to the targeted pilot).
+* `discord_bot.bot_token` — used if `DISCORD_BOT_TOKEN` is not set (prefer the env var).
+* `discord_bot.discord_channel_id` — supervisor alert channel (all embeds go here).
+* `discord_bot.send_confirmation_dm` — if `true`, the same landing-check / alert text is also sent as a DM to the paraglider’s `discord_user_id`.
+* Optional: `discord_bot.send_max_retries` (default 3) and `send_base_backoff` (seconds) for HTTP 429 retries.
+
+Intents: default + `message_content` + `reactions`.
+
+**Outbound embeds** (title / colour):
+
+| Type | When |
+|---|---|
+| `GUARDIAN ANGEL ONLINE` | monitoring start |
+| `GUARDIAN ANGEL OFFLINE` | monitoring stop |
+| `TAKE OFF` | entry into state `Flying` (live transition only; not after restore) |
+| `LANDING CHECK` | state `Clearance` — asks the pilot if the landing is OK |
+| `ALERT - NO RESPONSE` | state `Alert` — no reply in time, or loss-of-track path |
+| `ASSISTANCE REQUESTED` | pilot replied negatively (`👎` / “I need assistance”) |
+
+Alert and clearance messages include the pilot name, a PureTrack link (`…&k=<puretrack_key>`), and phone/email when present. The bot always registers the channel message for confirmation (`post_waiting_landing_confirmation`) so a configured administrator can acknowledge even when the pilot has no `discord_user_id`. If the pilot has a `discord_user_id`, they are **mentioned** (and optionally DM’d).
+
+**Inbound confirmation** (tied to the PureTrack key of the message, so several pilots can share one Discord user):
+
+* Who may reply: the targeted pilot **or** any ID listed in `guardian_angel.administrators`. Others get “not addressed”.
+* Reply on the channel message or on the optional DM: positive (`yes`, `I am safe`, `I am safe and have landed`) → `landingConfirmed()` → `Landed`; negative (`no`, `I need assistance`, `I am not safe`) → Clearance escalates to `Alert`, supervisors get `ASSISTANCE REQUESTED`.
+* Reactions: `👍` / `👌` positive, `👎` negative (skin-tone variants accepted). Handled via `on_raw_reaction_add` so it works if the message is not in cache.
+* Audit: Discord events carry `actor_role` (`pilot` | `admin`); persisted machine-state `source` is `admin` when an administrator acknowledges.
+* Pending confirmations expire after 300 s. Unrecognised replies get a short hint; the original message stays open.
+
+**Commands** (prefix `>`): `echo`, `check @member` (placeholder “is flying” + PureTrack group link).
+
+Email, Signal, and SMS below are **not** implemented; Discord is the only live notification channel.
+
 
 ## Signal
 
@@ -148,22 +186,29 @@ To view the diagram, copy the code below into the online tool [PlantUML Online](
 ```plantuml
 @startuml
 
-[*] --> Root
-
-note right of Root : At startup, restore the last persisted state when available
+[*] --> Root : cold start / init()
+[*] --> hist : restore_state(persisted)
 
 state Root {
+    state "H*" as hist <<deepHistory>>
 
-    [*] --> Unknown
+    [*] --> Initial
+    Initial --> Unknown : init()
 
     state Unknown {
-        Unknown : entry() / check()
+        Unknown : entry / arm_timer(unknown_timeout_s)
+        Unknown : entry / tick() if last_datetime != null
+        Unknown : exit / cancel_timer()
     }
 
     state Flying {
+        Flying : entry / signal takeoff (if signals enabled)
     }
 
-    note right of Clearance : Sends a message to the paraglider\nArm a timer
+    note right of Clearance
+      entry / signal clearance + arm_timer(clearance_timeout_s)
+      exit / cancel_timer()
+    end note
     state Clearance {
         Clearance : entry()
     }
@@ -171,29 +216,61 @@ state Root {
     state Landed {
     }
 
+    note right of Disconnected
+      entry / arm_timer(disconnected_timeout_s)
+      exit / cancel_timer()
+      Loss of recent track = safety path
+    end note
     state Disconnected {
+        Disconnected : entry()
     }
 
-    note right of Alert : Sends a message to the guardian angel\nSends a message to inform the paraglider\nArm a timer
+    note right of Alert
+      entry / signal alert + arm_timer(alert_repeat_timeout_s)
+      exit / cancel_timer()
+      timeout() re-enters Alert (re-notify)
+    end note
     state Alert {
         Alert : entry()
     }
 
-    Alert -> Landed : landingConfirmed()
-    Alert -> Alert : timeout()
-    Clearance -> Landed : landingConfirmed()
-    Clearance -> Alert : timeout()
-    Disconnected --> Unknown : connected()
+    Alert --> Landed : landingConfirmed()
+    Alert --> Alert : timeout()
+    Clearance --> Landed : landingConfirmed()
+    Clearance --> Alert : timeout()
     Disconnected --> Alert : timeout()
     Unknown --> Alert : timeout()
-    Flying --> Clearance : nullSpeed()
-    Flying --> Alert : highSpeed()
-    Flying --> Disconnected : disconnected()
-    Landed --> Flying : flying()
-    Unknown --> Flying : update(last_state) / check()\n[isFlying()]
-    Unknown --> Disconnected : update(last_state) / check()\n[isDisconnected()]
-    Unknown --> Landed : update(last_state) / check()\n[hasRecentData() && !isFlying()]
+
+    Flying --> Clearance : tick()\n[has_recent_data && is_stopped && is_near_ground]
+    Flying --> Clearance : tick()\n[has_recent_data && is_avg_stopped && is_near_ground]
+    Flying --> Alert : tick()\n[has_recent_data && is_high_speed]
+    Flying --> Disconnected : tick()\n[is_disconnected]
+    Landed --> Flying : tick()\n[is_flying]
+    Landed --> Disconnected : tick()\n[is_disconnected]
+    Unknown --> Flying : tick()\n[is_flying]
+    Unknown --> Disconnected : tick()\n[is_disconnected]
+    Unknown --> Landed : tick()\n[has_recent_data && !is_flying]
+    Disconnected --> Unknown : tick()\n[has_recent_data]
 }
+
+note bottom of Root
+  tick() is evaluated in add_transition order (first match wins).
+  H* re-runs the restored substate entry (timers; signals if enabled).
+  Telemetry is outside the machine; update() writes sensors then tick().
+
+  Predicates (cfg/state_machine):
+  - has_recent_data: 0 <= age(last_datetime) <= max_track_age_s
+  - is_disconnected: last_datetime != null && !has_recent_data
+  - is_flying: has_recent_data && avg_speed > flying_speed_mps
+  - is_stopped: speed < stopped_speed_mps
+  - is_avg_stopped: avg_speed < stopped_speed_mps
+  - is_near_ground: altitude_gnd_calc < clearance_max_agl_m
+  - is_high_speed: avg_speed > high_speed_mps
+  avg_speed = weighted mean over avg_speed_window_min (DB)
+
+  Grey zone: stay Flying when no tick() guard matches
+  (fresh data, not stopped+ground, not high_speed).
+end note
 
 @enduml
 ```

@@ -1,7 +1,7 @@
 {
     "logging": {
         "level": "INFO",
-        "file": "log/application.log",
+        "file": "logs/application.log",
         "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     },
     "guardian_angel": {
@@ -9,16 +9,22 @@
             {
                 "name": "me",
                 "puretrack_key": "my-key",
-                "discord_id": 0,
+                "discord_user_id": 0,
                 "phone_number": "+33700000000",
                 "email": ""
             },
             {
                 "name": "another",
                 "puretrack_key": "another-key",
-                "discord_id": 0,
+                "discord_user_id": 0,
                 "phone_number": "+33700000000",
                 "email": ""
+            }
+        ],
+        "administrators": [
+            {
+                "name": "guardian",
+                "discord_user_id": 0
             }
         ],
         "puretrack_site": {
@@ -29,11 +35,24 @@
         "discord_bot": {
             "dev_site": "https://discord.com/developers/applications",
             "bot_token": "",
-            "channel_id": 0,
+            "discord_channel_id": 0,
             "send_confirmation_dm": false
         },
         "database": {
-            "url": "sqlite:///data/paragliders.db"
+            "url": "sqlite:///data/paragliders.db",
+            "retention_hours": 48
+        },
+        "state_machine": {
+            "max_track_age_s": 300,
+            "unknown_timeout_s": 300,
+            "disconnected_timeout_s": 300,
+            "clearance_timeout_s": 300,
+            "alert_repeat_timeout_s": 300,
+            "stopped_speed_mps": 0.56,
+            "flying_speed_mps": 2.78,
+            "high_speed_mps": 16.67,
+            "clearance_max_agl_m": 60,
+            "avg_speed_window_min": 5
         }
     }
 }
