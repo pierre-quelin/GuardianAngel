@@ -189,6 +189,8 @@ To view the diagram, copy the code below into the online tool [PlantUML Online](
 [*] --> Root : cold start / init()
 [*] --> hist : restore_state(persisted)
 
+note right of Root : At startup, restore the last persisted state when available
+
 state Root {
     state "H*" as hist <<deepHistory>>
 
