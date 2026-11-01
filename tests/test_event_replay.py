@@ -56,7 +56,7 @@ async def test_replay_applies_captured_puretrack_event(tmp_path):
     paraglider = Paraglider({
         'name': 'Replay Pilot',
         'puretrack_key': 'X-replay',
-        'discord_id': 0,
+        'discord_user_id': 0,
         'phone_number': '',
         'email': '',
     }, emit_signals=False, initialize=False)
@@ -104,7 +104,7 @@ async def test_replay_and_live_tracking_share_persist_pipeline(tmp_path, monkeyp
         paraglider = Paraglider({
             'name': name,
             'puretrack_key': key,
-            'discord_id': 0,
+            'discord_user_id': 0,
             'phone_number': '',
             'email': '',
         }, emit_signals=False, initialize=False)

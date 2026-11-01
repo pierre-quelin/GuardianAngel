@@ -17,7 +17,7 @@ superviseurs et les parapentistes via Discord.
 - [x] Réception des réponses texte et des réactions Discord.
 - [x] Gestion des réactions avec et sans message présent dans le cache Discord.
 - [x] Association d'une réponse à la clé PureTrack du message concerné.
-- [x] Gestion de plusieurs parapentistes partageant le même `discord_id`.
+- [x] Gestion de plusieurs parapentistes partageant le même `discord_user_id`.
 - [x] Machine d'état avec les états `Unknown`, `Flying`, `Clearance`, `Alert`,
 	`Landed` et `Disconnected`.
 - [x] Capture optionnelle des réponses brutes PureTrack.
@@ -29,6 +29,7 @@ superviseurs et les parapentistes via Discord.
 - [x] Reprendre sans clearance un pilote déjà posé après un redémarrage.
 - [x] Restaurer de façon sûre un état de vol ou une perte de signal après un crash.
 - [x] Maintenir le diagramme PlantUML du README synchronisé avec l'automate.
+- [x] Acquittement des confirmations par un administrateur Discord configuré.
 
 ## Prochaines étapes prioritaires
 
@@ -39,11 +40,11 @@ superviseurs et les parapentistes via Discord.
 - [ ] Détecter une vitesse nulle pendant une durée configurable.
 - [x] Détecter une perte de signal ou l'absence de rapport PureTrack.
 - [x] Conserver l'état `Unknown` tant qu'aucune donnée PureTrack récente n'est disponible.
-- [ ] Utiliser la hauteur au-dessus du sol dans les décisions.
+- [x] Utiliser la hauteur au-dessus du sol dans les décisions.
 - [ ] Ignorer ou signaler les points PureTrack aberrants.
 - [ ] Implémenter la règle de pause suspecte : absence de déplacement pendant
 	une fenêtre donnée après une activité de vol significative.
-- [ ] Ajouter des seuils configurables et documentés.
+- [x] Ajouter des seuils configurables et documentés.
 
 ### 2. Scénarios de replay
 
@@ -56,12 +57,11 @@ superviseurs et les parapentistes via Discord.
 
 ### 3. Notifications et confirmations
 
-- [ ] Définir les messages d'alerte destinés aux superviseurs.
-- [ ] Ajouter téléphone et e-mail dans les alertes lorsque disponibles.
-- [ ] Gérer explicitement une réponse négative.
+- [x] Définir les messages d'alerte destinés aux superviseurs.
+- [x] Ajouter téléphone et e-mail dans les alertes lorsque disponibles.
 - [x] Gérer explicitement une réponse négative.
 - [ ] Gérer l'expiration et le renouvellement des confirmations.
-- [ ] Gérer les erreurs Discord et les limitations de débit.
+- [x] Gérer les erreurs Discord et les limitations de débit.
 - [ ] Ajouter une stratégie de reprise après perte de connexion Discord.
 
 ### 4. Stockage et séparation des responsabilités
@@ -69,7 +69,7 @@ superviseurs et les parapentistes via Discord.
 - [ ] Séparer les responsabilités PureTrack, détection, machine d'état,
 	stockage, replay et notifications.
 - [ ] Ajouter une abstraction de stockage pour faciliter les tests.
-- [ ] Éviter les appels réseau et les effets de bord dans les constructeurs.
+- [x] Éviter les appels réseau et les effets de bord dans les constructeurs.
 - [ ] Rendre les fenêtres temporelles et l'horloge injectables pour les tests.
 
 ### 5. Supervision
@@ -90,11 +90,24 @@ superviseurs et les parapentistes via Discord.
 
 ## Critères de validation
 
-- [ ] Tous les tests automatisés passent sans accès réseau.
+- [x] Tous les tests automatisés passent sans accès réseau.
 - [ ] Un replay complet produit les mêmes transitions que le mode réel.
-- [ ] Une alerte contient les informations nécessaires aux superviseurs.
-- [ ] Une réponse depuis le canal ou un DM cible le bon parapentiste.
-- [ ] Un même compte Discord peut confirmer plusieurs parapentistes sans
+- [x] Une alerte contient les informations nécessaires aux superviseurs.
+- [x] Une réponse depuis le canal ou un DM cible le bon parapentiste.
+- [x] Un même compte Discord peut confirmer plusieurs parapentistes sans
 	ambiguïté.
-- [ ] L'arrêt de l'application ferme proprement Discord, les tâches et les
+- [x] L'arrêt de l'application ferme proprement Discord, les tâches et les
 	timers.
+
+# Bugs et divers
+- [x] Sauvegarder l'état même si aucune info n'est remonté de puretrack
+- [x] Clarifier ce qui est conservé en bdd
+- [x] Ajout d'un admin qui aurait la possibilité d'acquitter pour quelqu'un d'autre
+- [ ] Clarifier la raison du nombre de relevés faible avec Flyskyhy. 1/min (Flyskyhy) vs 1/5s (XCTrack)
+- [ ] En cas de perte de connexion, revenir sur Flying si état précédent Flying
+- [ ] Peut être différencier l'état Unkown du démarrage de l'état Blind ou autre qui serait une perte de signal en vol.
+Au démarrage, si pas de données récentes et si l'état sauvegardé est ancien (durée à déterminer), il n'est pas nécessaire de lever une alerte. On peut passer à Landed automatiquement.
+- [ ] Basculer les messages pilote <-> bot sur un salon dédié plutôt qu'en privé.
+renommer le discord_id en discord_user_id
+Ajouter un discord_channel_id par pilote pour sa communication avec le bot et un par groupe de pilote pour la remonté des alertes.
+- [ ] Clarifier la différence entre le message ASSISTANCE REQUESTED et ALERT - NO RESPONSE

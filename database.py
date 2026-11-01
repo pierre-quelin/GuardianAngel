@@ -1,5 +1,5 @@
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, text, inspect
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import Session
@@ -7,6 +7,8 @@ from sqlalchemy.pool import NullPool
 
 Base = declarative_base()
 SessionLocal = None  # La session sera configurée dynamiquement
+_retention_hours = 48
+
 
 class ParaglidersData(Base):
     __tablename__ = 'paraglider_data'
@@ -20,7 +22,15 @@ class ParaglidersData(Base):
     speed_calc = Column(Float)
     altitude = Column(Float)
     altitude_gnd_calc = Column(Float)
-    state = Column(String)
+
+
+class ParagliderState(Base):
+    __tablename__ = 'paraglider_state'
+    paraglider_key = Column(String, primary_key=True)
+    state = Column(String, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    source = Column(String, nullable=False, default='tracking')
+
 
 def init_db_engine(cfg):
     """
@@ -29,8 +39,10 @@ def init_db_engine(cfg):
     Args:
         cfg (dict): Configuration for the db engine
     """
-    global SessionLocal
+    global SessionLocal, _retention_hours
+    cfg = cfg or {}
     url = cfg.get('url')
+    _retention_hours = int(cfg.get('retention_hours', 48))
     engine_kwargs = {}
     # SQLite connections are thread-bound by default. GuardianAngel runs DB work
     # via asyncio.to_thread, so disable the check and avoid pooled reuse across
@@ -42,9 +54,61 @@ def init_db_engine(cfg):
     engine = create_engine(url, **engine_kwargs)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-    # Crée les tables si elles n'existent pas
     Base.metadata.create_all(engine)
+    _migrate_legacy_state_column(engine)
     return engine
+
+
+def get_retention_hours():
+    return _retention_hours
+
+
+def _migrate_legacy_state_column(engine):
+    """Move state off paraglider_data into paraglider_state when upgrading an old DB."""
+    inspector = inspect(engine)
+    if 'paraglider_data' not in inspector.get_table_names():
+        return
+    columns = {column['name'] for column in inspector.get_columns('paraglider_data')}
+    if 'state' not in columns:
+        return
+
+    with engine.begin() as connection:
+        rows = connection.execute(text(
+            """
+            SELECT paraglider_key, state, datetime
+            FROM paraglider_data
+            WHERE state IS NOT NULL
+            ORDER BY datetime ASC
+            """
+        )).fetchall()
+        latest_by_key = {}
+        for paraglider_key, state, point_datetime in rows:
+            latest_by_key[paraglider_key] = (state, point_datetime)
+        for paraglider_key, (state, point_datetime) in latest_by_key.items():
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO paraglider_state (paraglider_key, state, updated_at, source)
+                    VALUES (:key, :state, :updated_at, :source)
+                    ON CONFLICT(paraglider_key) DO UPDATE SET
+                        state=excluded.state,
+                        updated_at=excluded.updated_at,
+                        source=excluded.source
+                    """
+                ),
+                {
+                    'key': paraglider_key,
+                    'state': state,
+                    'updated_at': point_datetime or datetime.now(timezone.utc).replace(tzinfo=None),
+                    'source': 'tracking',
+                },
+            )
+        # SQLite 3.35+ supports DROP COLUMN; leave the column if unsupported.
+        try:
+            connection.execute(text('ALTER TABLE paraglider_data DROP COLUMN state'))
+        except Exception:
+            pass
+
 
 def save_paraglider_point(session: Session, paraglider_key, point):
     """
@@ -64,9 +128,9 @@ def save_paraglider_point(session: Session, paraglider_key, point):
         speed_calc=point.get('speed_calc'),
         altitude=point.get('alt_gps'),
         altitude_gnd_calc=point.get('alt_gnd_calc'),
-        state=point.get('state') # cf. Paraglider.states
     )
     session.add(paraglider_data)
+
 
 def update_paraglider_data(session: Session, paraglider_key, points):
     """
@@ -77,7 +141,6 @@ def update_paraglider_data(session: Session, paraglider_key, points):
         points (list): A list of points to update.
     """
     for point in points:
-        # Vérifiez si le point existe déjà dans la base
         existing_point = session.query(ParaglidersData).filter_by(
             paraglider_key=paraglider_key,
             datetime=point['datetime']
@@ -86,29 +149,47 @@ def update_paraglider_data(session: Session, paraglider_key, points):
             save_paraglider_point(session, paraglider_key, point)
     session.commit()
 
-def get_last_paraglider_state(session, paraglider_key):
-    """
-    Get the last known state of a paraglider.
 
-    Args:
-        session (Session): SQLAlchemy session.
-        paraglider_key (str): The key of the paraglider.
-
-    Returns:
-        ParaglidersData: The last known state of the paraglider.
-    """
-    last_state = session.query(ParaglidersData).filter(
+def get_last_paraglider_point(session, paraglider_key):
+    """Return the latest tracking point for a paraglider, or None."""
+    return session.query(ParaglidersData).filter(
         ParaglidersData.paraglider_key == paraglider_key
     ).order_by(ParaglidersData.datetime.desc()).first()
 
-    return last_state
 
-def update_last_paraglider_state(session: Session, paraglider_key, state):
-    """Persist the current state on the latest tracking record."""
-    last_state = get_last_paraglider_state(session, paraglider_key)
-    if last_state is not None:
-        last_state.state = state
-        session.commit()
+# Backward-compatible alias used by older call sites / tests during transition.
+get_last_paraglider_state = get_last_paraglider_point
+
+
+def get_paraglider_machine_state(session, paraglider_key):
+    """Return the persisted machine state row, or None."""
+    return session.query(ParagliderState).filter(
+        ParagliderState.paraglider_key == paraglider_key
+    ).first()
+
+
+def upsert_paraglider_state(session: Session, paraglider_key, state, source='tracking'):
+    """Persist the current machine state independently of tracking points."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    row = get_paraglider_machine_state(session, paraglider_key)
+    if row is None:
+        session.add(ParagliderState(
+            paraglider_key=paraglider_key,
+            state=state,
+            updated_at=now,
+            source=source,
+        ))
+    else:
+        row.state = state
+        row.updated_at = now
+        row.source = source
+    session.commit()
+
+
+def update_last_paraglider_state(session: Session, paraglider_key, state, source='tracking'):
+    """Persist machine state (replaces writing state onto the latest GPS row)."""
+    upsert_paraglider_state(session, paraglider_key, state, source=source)
+
 
 def get_paraglider_history(paraglider_key):
     """
@@ -126,6 +207,7 @@ def get_paraglider_history(paraglider_key):
     ).all()
     session.close()
     return history
+
 
 def calculate_average_speed_old(session: Session, paraglider_key, minutes=5):
     """
@@ -151,6 +233,7 @@ def calculate_average_speed_old(session: Session, paraglider_key, minutes=5):
     # TODO - Check if the speed is None. If so, use the calculated speed
     total_speed = sum(point.speed for point in points if point.speed is not None)
     return round(total_speed / len(points), 2)
+
 
 def calculate_average_speed(session: Session, paraglider_key, minutes=5):
     """
@@ -194,26 +277,26 @@ def calculate_average_speed(session: Session, paraglider_key, minutes=5):
     average_speed = total_speed_weighted / total_time
     return round(average_speed, 2)
 
-def purge_old_data(session: Session, hours=48):
+
+def purge_old_data(session: Session, hours=None):
     """
-    Purge data older than the specified number of hours from the database.
+    Purge tracking points older than the specified number of hours.
 
     Args:
         session (Session): SQLAlchemy session.
-        hours (int): The age threshold in hours for purging data. Default is 48 hours.
+        hours (int): Age threshold in hours. Defaults to configured retention_hours (48).
 
     Returns:
         int: The number of records deleted.
     """
-    # Calculate the time threshold
+    if hours is None:
+        hours = _retention_hours
     time_threshold = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
 
-    # Delete records older than the threshold
     deleted_count = session.query(ParaglidersData).filter(
         ParaglidersData.datetime < time_threshold
     ).delete()
 
-    # Commit the changes
     session.commit()
 
     return deleted_count
