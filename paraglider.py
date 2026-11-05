@@ -27,6 +27,13 @@ class Paraglider:
         self.name = cfg.get('name')
         self.puretrack_key = cfg.get('puretrack_key')
         self.discord_user_id = cfg.get('discord_user_id')
+        self.discord_channel_id = cfg.get('discord_channel_id') or None
+        self.supervisor_channel_id = cfg.get('supervisor_channel_id') or None
+        self.supervisor_user_ids = {
+            int(value) for value in (cfg.get('supervisor_user_ids') or [])
+            if value not in (None, '', 0, '0')
+        }
+        self.group_name = cfg.get('group_name')
         self.phone_number = cfg.get('phone_number')
         self.email = cfg.get('email')
         sm = dict(DEFAULT_STATE_MACHINE)

@@ -35,13 +35,12 @@ coordinate PureTrack monitoring, event processing, and Discord communication.
 It supports:
 
 * asynchronous monitoring without blocking the Discord client;
-* Discord notifications in the configured alert channel;
-* surveillance startup and shutdown notifications in the configured alert channel;
+* Discord notifications routed by pilot group;
+* startup and shutdown notifications in each group's supervisor channel;
 * targeted Discord alert confirmations for the paraglider;
-* optional delivery of the same landing-confirmation message both to the
-    supervisor alert channel and directly to the paraglider by Discord DM;
-* landing confirmation replies from the targeted pilot or a configured
-    administrator (`guardian_angel.administrators`);
+* optional delivery of the same landing-confirmation message by Discord DM;
+* landing confirmation replies from the targeted pilot or a supervisor
+    configured for that pilot's group;
 * confirmation by text reply (`yes`, `I am safe`, `I am safe and have landed`) or by `👍` / `👌` reaction;
 * negative response by text reply (`no`, `I need assistance`, `I am not safe`) or by `👎` reaction;
 * multiple paragliders sharing the same Discord user ID, with each confirmation
@@ -50,16 +49,66 @@ It supports:
 * replay of captured events without contacting PureTrack, with an optional
     dry-run mode that disables Discord notifications.
 
-By default, notifications are sent to the configured alert channel, where the
-pilot can reply to the specific landing-confirmation message. To also send the
-landing confirmation by direct message, set `send_confirmation_dm` to `true`
-in the Discord bot configuration. Replies from either message are accepted.
+Each group has a supervisor channel and its own list of supervisors; each
+pilot has a channel for landing confirmations and related conversations.
+Alerts go to the pilot's group's supervisor channel. To also send a copy of a
+confirmation to the pilot by direct message, set `send_confirmation_dm` to
+`true`; DMs remain optional and replies to them are accepted.
+
+## Running locally (without Docker)
+
+Run these commands from the repository root. Python 3.11 or newer is
+recommended:
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+mkdir -p logs data
+```
+
+Create a local runtime configuration from the example if you do not already
+have one:
+
+```sh
+cp cfg/config.base.json cfg/config.json
+```
+
+Edit `cfg/config.json` and replace the example values. Create a Discord
+category for each group, then create its supervisor channel (for example
+`👼-angel`) and one channel per pilot. The category name is the group's `name`
+(for example `Ange Clint E.`); `Batouchoncel` remains the event name and does
+not need a configuration field. Configure the group's supervisor channel ID
+and supervisor user IDs, and each pilot's PureTrack key, Discord user ID, and
+channel ID. Set the bot token in the environment rather than committing it to
+the configuration:
+
+```sh
+export DISCORD_BOT_TOKEN="<your Discord bot token>"
+```
+
+Start the application from the repository root:
+
+```sh
+python main.py
+```
+
+On first startup, the application extracts the configured PureTrack group and
+creates `cfg/group.json` as a setup template, split into groups of at most eight
+pilots. Review the generated pilot groups, configure their supervisor and
+channel IDs, and copy the groups into `guardian_angel.groups` in
+`cfg/config.json`. Existing grouped templates are preserved on later starts;
+use `--sync-group` to regenerate the template explicitly (this replaces manual
+edits in `cfg/group.json`). The application then begins monitoring from
+`cfg/config.json`. Logs are written to
+`logs/application.log`; the SQLite database is stored under `data/`. To stop
+the application, press `Ctrl+C`.
 
 Run the automated tests with:
 
 ```sh
-source .venv/bin/activate
-pytest -q
+.venv/bin/pytest -q
 ```
 
 Replay a captured event file without network notifications:
@@ -110,11 +159,18 @@ Implemented with [discord.py](https://discordpy.readthedocs.io) (`discord.ext.co
 
 **Configuration** (`guardian_angel` in the runtime JSON):
 
-* `administrators` — list of `{ "name", "discord_user_id" }` allowed to acknowledge
-  any pending clearance/alert confirmation (in addition to the targeted pilot).
 * `discord_bot.bot_token` — used if `DISCORD_BOT_TOKEN` is not set (prefer the env var).
-* `discord_bot.discord_channel_id` — supervisor alert channel (all embeds go here).
-* `discord_bot.send_confirmation_dm` — if `true`, the same landing-check / alert text is also sent as a DM to the paraglider’s `discord_user_id`.
+* `groups[]` — Discord supervision group, named after its category.
+* `groups[].supervisor_channel_id` — the group's supervisor channel. Startup,
+  shutdown, takeoff, assistance, and alert notifications are sent here.
+* `groups[].supervisor_user_ids` — Discord user IDs allowed to acknowledge
+  confirmation requests for pilots in that group.
+* `groups[].pilots[]` — pilots belonging to this group.
+* `groups[].pilots[].discord_channel_id` — channel for that pilot's landing
+  confirmation and related conversation.
+* `discord_bot.send_confirmation_dm` — if `true`, confirmation requests are
+  also copied to the pilot's `discord_user_id` by DM. DMs remain optional in
+  addition to group and pilot channels.
 * Optional: `discord_bot.send_max_retries` (default 3) and `send_base_backoff` (seconds) for HTTP 429 retries.
 
 Intents: default + `message_content` + `reactions`.
@@ -128,16 +184,17 @@ Intents: default + `message_content` + `reactions`.
 | `TAKE OFF` | entry into state `Flying` (live transition only; not after restore) |
 | `LANDING CHECK` | state `Clearance` — asks the pilot if the landing is OK |
 | `ALERT - NO RESPONSE` | state `Alert` — no reply in time, or loss-of-track path |
+| `ALERT ACKNOWLEDGED` | an alert confirmation was acknowledged by the pilot or a group supervisor |
 | `ASSISTANCE REQUESTED` | pilot replied negatively (`👎` / “I need assistance”) |
 
-Alert and clearance messages include the pilot name, a PureTrack link (`…&k=<puretrack_key>`), and phone/email when present. The bot always registers the channel message for confirmation (`post_waiting_landing_confirmation`) so a configured administrator can acknowledge even when the pilot has no `discord_user_id`. If the pilot has a `discord_user_id`, they are **mentioned** (and optionally DM’d).
+Alert and clearance messages include the pilot name, a PureTrack link (`…&k=<puretrack_key>`), and phone/email when present. Alerts are sent to the group's supervisor channel and the pilot's confirmation prompt to their channel. A configured group supervisor can acknowledge even when the pilot has no `discord_user_id`. If the pilot has a `discord_user_id`, they are **mentioned** (and optionally DM’d).
 
 **Inbound confirmation** (tied to the PureTrack key of the message, so several pilots can share one Discord user):
 
-* Who may reply: the targeted pilot **or** any ID listed in `guardian_angel.administrators`. Others get “not addressed”.
-* Reply on the channel message or on the optional DM: positive (`yes`, `I am safe`, `I am safe and have landed`) → `landingConfirmed()` → `Landed`; negative (`no`, `I need assistance`, `I am not safe`) → Clearance escalates to `Alert`, supervisors get `ASSISTANCE REQUESTED`.
+* Who may reply: the targeted pilot **or** a supervisor ID listed for the pilot's group. Supervisors can only acknowledge requests for their own group. Others get “not addressed”.
+* Reply on the pilot channel message or on the optional DM: positive (`yes`, `I am safe`, `I am safe and have landed`) → `landingConfirmed()` → `Landed`; negative (`no`, `I need assistance`, `I am not safe`) → Clearance escalates to `Alert`, supervisors get `ASSISTANCE REQUESTED`.
 * Reactions: `👍` / `👌` positive, `👎` negative (skin-tone variants accepted). Handled via `on_raw_reaction_add` so it works if the message is not in cache.
-* Audit: Discord events carry `actor_role` (`pilot` | `admin`); persisted machine-state `source` is `admin` when an administrator acknowledges.
+* Audit: Discord events carry `actor_role` (`pilot` | `supervisor`); persisted machine-state `source` is `supervisor` when a supervisor acknowledges.
 * Pending confirmations expire after 300 s. Unrecognised replies get a short hint; the original message stays open.
 
 **Commands** (prefix `>`): `echo`, `check @member` (placeholder “is flying” + PureTrack group link).
@@ -291,7 +348,8 @@ docker save -o guardian-angel.tar guardian-angel
 
 Running the container with specific config.json :
 ``` sh
-docker run --rm -it --restart=always \
+docker run -it --restart=unless-stopped \
+    -e DISCORD_BOT_TOKEN \
     -v $(pwd)/cfg/config.json:/usr/src/app/cfg/config.json \
     -v $(pwd)/logs:/usr/src/app/logs \
     -v $(pwd)/data:/usr/src/app/data \
@@ -301,7 +359,8 @@ docker run --rm -it --restart=always \
 
 Running the container with volumes (for development) :
 ``` sh
-docker run --rm -it --restart=always \
+docker run -it --restart=unless-stopped \
+    -e DISCORD_BOT_TOKEN \
     -v $(pwd):/usr/src/app \
     guardian-angel
 ```

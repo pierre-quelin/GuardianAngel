@@ -58,11 +58,14 @@ async def main():
     angel = GuardianAngel(cfg.get('guardian_angel'))
     if options['sync_group']:
         logger.info("Syncing PureTrack group to %s", options['group_output'])
-        members = await angel.sync_group_from_puretrack(options['group_output'])
-        if members is None:
+        groups = await angel.sync_group_from_puretrack(
+            options['group_output'],
+            force=True,
+        )
+        if groups is None:
             logger.error("Remote group sync failed")
             return
-        logger.info("Wrote %s members to %s", len(members), options['group_output'])
+        logger.info("Wrote %s pilot groups to %s", len(groups), options['group_output'])
         return
 
     if options['replay_mode']:
@@ -88,8 +91,7 @@ async def main():
         await angel.stop_monitoring()
         return
 
-    # Same role as the former constructor fetch_remote_group=True:
-    # refresh cfg/group.json from the existing PureTrack group before monitoring.
+    # Create the setup template once; preserve manual edits on subsequent starts.
     await angel.sync_group_from_puretrack()
     await angel.start_monitoring(period=30)
 
