@@ -287,7 +287,7 @@ async def test_confirmation_embed_registers_channel_and_dm_ids_together():
             sent_dm.append((message, embed))
             return SimpleNamespace(id=101 + len(sent_dm))
 
-    async def post_bye(discord_id, actor_role="pilot"):
+    async def post_bye(discord_id, actor_role="pilot", channel_id=None):
         return None
 
     bot.post_message_to_channel = post_message_to_channel
@@ -329,6 +329,185 @@ async def test_confirmation_embed_registers_channel_and_dm_ids_together():
 
 
 @pytest.mark.asyncio
+async def test_alert_embed_stays_in_supervisor_channel_and_prompt_uses_pilot_channel():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    bot.discord_channel_id = 55
+    bot.send_confirmation_dm = False
+    bot.landing_to_be_confirmed = {}
+    bot.msg_confirmation_instructions = 'Reply with 👍 or 👎.'
+    bot._ready_event = asyncio.Event()
+    bot._ready_event.set()
+    bot.is_ready = lambda: True
+    sent = []
+
+    async def post_message_to_channel(channel_id, message, embed=None):
+        sent.append((channel_id, message, embed))
+        return 100 + len(sent)
+
+    bot.post_message_to_channel = post_message_to_channel
+
+    await bot.post_waiting_landing_confirmation(
+        7,
+        'Alert for Pilot',
+        'X-pilot',
+        mention_first=False,
+        notification_type='alert',
+        pilot_channel_id=77,
+    )
+
+    assert sent[0][0:2] == (55, None)
+    assert sent[0][2].title == 'ALERT - NO RESPONSE'
+    assert sent[1] == (77, 'Alert for Pilot\n\n<@7> Reply with 👍 or 👎.', None)
+    assert set(bot.landing_to_be_confirmed) == {101, 102}
+    confirmation = bot.landing_to_be_confirmed[101]
+    assert bot.landing_to_be_confirmed[102] is confirmation
+    assert confirmation['channel_id'] == 77
+    assert confirmation['paraglider_key'] == 'X-pilot'
+    assert confirmation['message_ids'] == {101, 102}
+    assert confirmation['supervisor_user_ids'] == set()
+
+
+@pytest.mark.asyncio
+async def test_supervisor_can_acknowledge_from_the_group_alert_channel():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    bot.landing_to_be_confirmed = {
+        100: {
+            'discord_id': 7,
+            'paraglider_key': 'X-pilot',
+            'channel_id': 77,
+            'supervisor_user_ids': {99},
+            'message_ids': {100},
+        },
+    }
+    bot._cleanup_expired_confirmations = lambda: None
+    bot._pending_confirmation_events = asyncio.Queue()
+    bot._positive_reaction_emojis = DiscordBot._POSITIVE_REACTION_EMOJIS
+    bot._negative_reaction_emojis = DiscordBot._NEGATIVE_REACTION_EMOJIS
+    acknowledgments = []
+
+    async def post_bye(discord_id, actor_role='pilot', channel_id=None):
+        acknowledgments.append((discord_id, actor_role, channel_id))
+
+    bot.post_bye = post_bye
+
+    await bot._handle_reaction_confirmation(
+        100, 99, '👍', 'Supervisor', channel_id=55
+    )
+
+    event = await bot._pending_confirmation_events.get()
+    assert event['actor_role'] == 'supervisor'
+    assert event['paraglider_key'] == 'X-pilot'
+    assert acknowledgments == [(99, 'supervisor', 55)]
+
+
+@pytest.mark.asyncio
+async def test_alert_acknowledgment_notifies_supervisor_channel():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    bot.landing_to_be_confirmed = {
+        100: {
+            'discord_id': 7,
+            'paraglider_key': 'X-pilot',
+            'pilot_name': 'Pilot',
+            'notification_type': 'alert',
+            'channel_id': 77,
+            'supervisor_channel_id': 55,
+            'supervisor_user_ids': {99},
+            'message_ids': {100},
+        },
+    }
+    bot._cleanup_expired_confirmations = lambda: None
+    bot._pending_confirmation_events = asyncio.Queue()
+    bot._positive_reaction_emojis = DiscordBot._POSITIVE_REACTION_EMOJIS
+    bot._negative_reaction_emojis = DiscordBot._NEGATIVE_REACTION_EMOJIS
+    acknowledged = []
+
+    async def post_bye(discord_id, actor_role='pilot', channel_id=None):
+        return None
+
+    async def send_message(message, notification_type=None, channel_id=None):
+        acknowledged.append((message, notification_type, channel_id))
+        return 101
+
+    bot.post_bye = post_bye
+    bot.send_message_async = send_message
+
+    await bot._handle_reaction_confirmation(
+        100, 7, '👍', 'Pilot', channel_id=77
+    )
+
+    assert acknowledged == [(
+        '✅ Alert for **Pilot** acknowledged by pilot <@7>.',
+        'acknowledged',
+        55,
+    )]
+
+
+@pytest.mark.asyncio
+async def test_clearance_confirmation_uses_pilot_channel():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    bot.discord_channel_id = 55
+    bot.send_confirmation_dm = False
+    bot.landing_to_be_confirmed = {}
+    bot.msg_confirmation_instructions = 'Reply with 👍 or 👎.'
+    bot._ready_event = asyncio.Event()
+    bot._ready_event.set()
+    bot.is_ready = lambda: True
+    sent = []
+
+    async def post_message_to_channel(channel_id, message, embed=None):
+        sent.append((channel_id, message, embed))
+        return 200 + len(sent)
+
+    bot.post_message_to_channel = post_message_to_channel
+
+    await bot.post_waiting_landing_confirmation(
+        7,
+        'Pilot has landed. Is everything OK?',
+        'X-pilot',
+        notification_type='clearance',
+        pilot_channel_id=77,
+    )
+
+    assert len(sent) == 2
+    assert all(item[0] == 77 for item in sent)
+    assert sent[0][2].title == 'LANDING CHECK'
+    assert sent[0][2].description == 'Pilot has landed. Is everything OK?'
+    assert sent[1][1] == '<@7> Reply with 👍 or 👎.'
+
+
+@pytest.mark.asyncio
+async def test_reaction_acknowledgment_uses_interaction_channel():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    bot.landing_to_be_confirmed = {
+        100: {
+            'discord_id': 7,
+            'paraglider_key': 'X-pilot',
+            'channel_id': 77,
+        },
+    }
+    bot._cleanup_expired_confirmations = lambda: None
+    bot._pending_confirmation_events = asyncio.Queue()
+    bot._positive_reaction_emojis = DiscordBot._POSITIVE_REACTION_EMOJIS
+    bot._negative_reaction_emojis = DiscordBot._NEGATIVE_REACTION_EMOJIS
+    acknowledgments = []
+
+    async def post_bye(discord_id, actor_role='pilot', channel_id=None):
+        acknowledgments.append((discord_id, actor_role, channel_id))
+
+    bot.post_bye = post_bye
+
+    await bot._handle_reaction_confirmation(100, 7, '👍', 'Pilot', channel_id=77)
+
+    assert acknowledgments == [(7, 'pilot', 77)]
+    assert (await bot._pending_confirmation_events.get())['paraglider_key'] == 'X-pilot'
+
+
+@pytest.mark.asyncio
 async def test_startup_notification_uses_neutral_embed():
     bot = DiscordBot.__new__(DiscordBot)
     bot.logger = get_logger('test')
@@ -358,19 +537,45 @@ async def test_shutdown_notification_uses_neutral_embed():
     bot = DiscordBot.__new__(DiscordBot)
     bot._shutdown_message_sent = False
     bot.msg_good_bye = 'I will be back soon. Stay safe.'
+    bot.supervisor_channels = [55, 56]
     bot.is_ready = lambda: True
     sent_types = []
 
-    async def send_message(message, notification_type=None):
-        sent_types.append(notification_type)
-        return 100
+    async def send_message(message, notification_type=None, channel_id=None):
+        sent_types.append((notification_type, channel_id))
+        return 100 + len(sent_types)
 
     bot.send_message_async = send_message
 
     message_id = await bot.send_shutdown_message()
 
-    assert message_id == 100
-    assert sent_types == ['shutdown']
+    assert message_id == 101
+    assert sent_types == [('shutdown', 55), ('shutdown', 56)]
+
+
+@pytest.mark.asyncio
+async def test_startup_notification_goes_to_each_supervisor_channel():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    bot._connection = SimpleNamespace(user=SimpleNamespace(name='Guardian bot'))
+    bot._ready_event = asyncio.Event()
+    bot.supervisor_channels = [55, 56]
+    bot._startup_message_sent = False
+    bot._ttl_cleanup_task = SimpleNamespace(done=lambda: False)
+    bot.msg_hello = 'Bot online'
+    sent = []
+
+    async def send_message(message, notification_type=None, channel_id=None):
+        sent.append((message, notification_type, channel_id))
+
+    bot.send_message_async = send_message
+
+    await bot.on_ready()
+
+    assert sent == [
+        (bot.msg_hello, 'startup', 55),
+        (bot.msg_hello, 'startup', 56),
+    ]
 
 
 @pytest.mark.asyncio
@@ -728,15 +933,15 @@ async def test_check_command_uses_bot_puretrack_group():
 
 
 @pytest.mark.asyncio
-async def test_admin_reaction_confirms_landing():
+async def test_group_supervisor_reaction_confirms_landing():
     bot = DiscordBot.__new__(DiscordBot)
     bot._connection = SimpleNamespace(user=SimpleNamespace(id=42))
     bot.logger = get_logger('test')
-    bot.administrator_ids = {99}
     bot.landing_to_be_confirmed = {
         100: {
             'discord_id': 7,
             'paraglider_key': 'X-pilot',
+            'supervisor_user_ids': {99},
             'created_at': asyncio.get_running_loop().time(),
             'message_ids': {100},
         },
@@ -759,22 +964,22 @@ async def test_admin_reaction_confirms_landing():
     event = await bot._pending_confirmation_events.get()
     assert event['type'] == 'landing_confirmed'
     assert event['discord_id'] == 99
-    assert event['actor_role'] == 'admin'
+    assert event['actor_role'] == 'supervisor'
     assert event['paraglider_key'] == 'X-pilot'
-    assert byes == [(99, 'admin')]
+    assert byes == [(99, 'supervisor')]
     assert bot.landing_to_be_confirmed == {}
 
 
 @pytest.mark.asyncio
-async def test_admin_can_reject_confirmation_without_pilot_discord_id():
+async def test_group_supervisor_can_reject_confirmation_without_pilot_discord_id():
     bot = DiscordBot.__new__(DiscordBot)
     bot._connection = SimpleNamespace(user=SimpleNamespace(id=42))
     bot.logger = get_logger('test')
-    bot.administrator_ids = {99}
     bot.landing_to_be_confirmed = {
         100: {
             'discord_id': None,
             'paraglider_key': 'X-orphan',
+            'supervisor_user_ids': {99},
             'created_at': asyncio.get_running_loop().time(),
             'message_ids': {100},
         },
@@ -796,7 +1001,7 @@ async def test_admin_can_reject_confirmation_without_pilot_discord_id():
 
     event = await bot._pending_confirmation_events.get()
     assert event['type'] == 'landing_rejected'
-    assert event['actor_role'] == 'admin'
+    assert event['actor_role'] == 'supervisor'
     assert event['paraglider_key'] == 'X-orphan'
     assert negatives == [99]
 
@@ -806,11 +1011,11 @@ async def test_third_party_reaction_is_not_addressed():
     bot = DiscordBot.__new__(DiscordBot)
     bot._connection = SimpleNamespace(user=SimpleNamespace(id=42))
     bot.logger = get_logger('test')
-    bot.administrator_ids = {99}
     bot.landing_to_be_confirmed = {
         100: {
             'discord_id': 7,
             'paraglider_key': 'X-pilot',
+            'supervisor_user_ids': set(),
             'created_at': asyncio.get_running_loop().time(),
             'message_ids': {100},
         },
@@ -825,25 +1030,28 @@ async def test_third_party_reaction_is_not_addressed():
     bot.post_not_addressed = post_not_addressed
 
     await bot.on_raw_reaction_add(SimpleNamespace(
-        user_id=55,
+        user_id=99,
         message_id=100,
         emoji='👍',
     ))
 
     assert bot._pending_confirmation_events.empty()
-    assert not_addressed == [55]
+    assert not_addressed == [99]
     assert 100 in bot.landing_to_be_confirmed
 
 
 @pytest.mark.asyncio
-async def test_pilot_reply_still_accepted_with_administrators_configured():
+async def test_pilot_reply_is_accepted_with_group_supervisors_configured():
     bot = DiscordBot.__new__(DiscordBot)
     bot_user = SimpleNamespace(id=42)
     bot._connection = SimpleNamespace(user=bot_user)
     bot.logger = get_logger('test')
-    bot.administrator_ids = {99}
     bot.landing_to_be_confirmed = {
-        100: {'discord_id': 7, 'paraglider_key': 'X-pilot'},
+        100: {
+            'discord_id': 7,
+            'paraglider_key': 'X-pilot',
+            'supervisor_user_ids': {99},
+        },
     }
     bot._pending_confirmation_events = asyncio.Queue()
     bot._cleanup_expired_confirmations = lambda: None
@@ -872,27 +1080,25 @@ async def test_pilot_reply_still_accepted_with_administrators_configured():
     assert byes == [(7, 'pilot')]
 
 
-def test_administrator_ids_loaded_from_config():
+def test_supervisor_channels_loaded_from_config():
     bot = DiscordBot({
-        'discord_channel_id': 1,
-        'administrators': [
-            {'name': 'guardian', 'discord_user_id': 99},
-            {'name': 'placeholder', 'discord_user_id': 0},
-            {'name': 'also', 'discord_user_id': '100'},
-        ],
+        'supervisor_channels': ['1', 2, 0],
     })
-    assert bot.administrator_ids == {99, 100}
+    assert bot.supervisor_channels == [1, 2]
 
 
 @pytest.mark.asyncio
-async def test_admin_text_reply_confirms_landing():
+async def test_group_supervisor_text_reply_confirms_landing():
     bot = DiscordBot.__new__(DiscordBot)
     bot_user = SimpleNamespace(id=42)
     bot._connection = SimpleNamespace(user=bot_user)
     bot.logger = get_logger('test')
-    bot.administrator_ids = {99}
     bot.landing_to_be_confirmed = {
-        100: {'discord_id': 7, 'paraglider_key': 'X-pilot'},
+        100: {
+            'discord_id': 7,
+            'paraglider_key': 'X-pilot',
+            'supervisor_user_ids': {99},
+        },
     }
     bot._pending_confirmation_events = asyncio.Queue()
     bot._cleanup_expired_confirmations = lambda: None
@@ -917,5 +1123,5 @@ async def test_admin_text_reply_confirms_landing():
 
     event = await bot._pending_confirmation_events.get()
     assert event['type'] == 'landing_confirmed'
-    assert event['actor_role'] == 'admin'
-    assert byes == [(99, 'admin')]
+    assert event['actor_role'] == 'supervisor'
+    assert byes == [(99, 'supervisor')]

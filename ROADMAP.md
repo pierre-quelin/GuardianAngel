@@ -29,7 +29,9 @@ superviseurs et les parapentistes via Discord.
 - [x] Reprendre sans clearance un pilote déjà posé après un redémarrage.
 - [x] Restaurer de façon sûre un état de vol ou une perte de signal après un crash.
 - [x] Maintenir le diagramme PlantUML du README synchronisé avec l'automate.
-- [x] Acquittement des confirmations par un administrateur Discord configuré.
+- [x] Acquittement des confirmations par les superviseurs Discord du groupe.
+- [x] Informer le salon superviseur lorsqu'une alerte est acquittée.
+- [x] Générer depuis PureTrack un modèle de groupes de huit pilotes maximum.
 
 ## Prochaines étapes prioritaires
 
@@ -102,12 +104,14 @@ superviseurs et les parapentistes via Discord.
 # Bugs et divers
 - [x] Sauvegarder l'état même si aucune info n'est remonté de puretrack
 - [x] Clarifier ce qui est conservé en bdd
-- [x] Ajout d'un admin qui aurait la possibilité d'acquitter pour quelqu'un d'autre
+- [x] Remplacer les administrateurs globaux par des superviseurs rattachés à
+	chaque groupe de pilotes.
 - [ ] Clarifier la raison du nombre de relevés faible avec Flyskyhy. 1/min (Flyskyhy) vs 1/5s (XCTrack)
 - [ ] En cas de perte de connexion, revenir sur Flying si état précédent Flying
 - [ ] Peut être différencier l'état Unkown du démarrage de l'état Blind ou autre qui serait une perte de signal en vol.
 Au démarrage, si pas de données récentes et si l'état sauvegardé est ancien (durée à déterminer), il n'est pas nécessaire de lever une alerte. On peut passer à Landed automatiquement.
-- [ ] Basculer les messages pilote <-> bot sur un salon dédié plutôt qu'en privé.
-renommer le discord_id en discord_user_id
-Ajouter un discord_channel_id par pilote pour sa communication avec le bot et un par groupe de pilote pour la remonté des alertes.
+- [x] Regrouper les pilotes et superviseurs, avec un salon d'alerte par groupe
+	et un salon de communication configurable par pilote.
+- [x] Conserver les DM en option pour les confirmations.
 - [ ] Clarifier la différence entre le message ASSISTANCE REQUESTED et ALERT - NO RESPONSE
+- [ ] Renommer la configuration discord_bot en discord

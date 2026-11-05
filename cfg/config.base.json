@@ -5,37 +5,33 @@
         "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     },
     "guardian_angel": {
-        "paragliders": [
-            {
-                "name": "me",
-                "puretrack_key": "my-key",
-                "discord_user_id": 0,
-                "phone_number": "+33700000000",
-                "email": ""
-            },
-            {
-                "name": "another",
-                "puretrack_key": "another-key",
-                "discord_user_id": 0,
-                "phone_number": "+33700000000",
-                "email": ""
-            }
-        ],
-        "administrators": [
-            {
-                "name": "guardian",
-                "discord_user_id": 0
-            }
-        ],
         "puretrack_site": {
             "group": "my-grp"
         },
+        "groups": [
+            {
+                "name": "Ange Clint E.",
+                "supervisor_channel_id": 0,
+                "supervisor_user_ids": [
+                    0
+                ],
+                "pilots": [
+                    {
+                        "name": "Pilot name",
+                        "puretrack_key": "my-key",
+                        "discord_user_id": 0,
+                        "discord_channel_id": 0,
+                        "phone_number": "",
+                        "email": ""
+                    }
+                ]
+            }
+        ],
         "capture_events": false,
         "capture_file": "data/puretrack_events.json",
         "discord_bot": {
             "dev_site": "https://discord.com/developers/applications",
             "bot_token": "",
-            "discord_channel_id": 0,
             "send_confirmation_dm": false
         },
         "database": {

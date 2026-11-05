@@ -489,6 +489,9 @@ async def test_alert_confirmation_targets_the_paraglider():
     paraglider = SimpleNamespace(
         name='Pilot',
         discord_user_id=123,
+        discord_channel_id=456,
+        supervisor_channel_id=789,
+        supervisor_user_ids={99},
         puretrack_key='X-pilot',
         phone_number='',
         email='',
@@ -499,9 +502,15 @@ async def test_alert_confirmation_targets_the_paraglider():
     plain = []
 
     async def post_confirmation(
-        discord_id, message, paraglider_key, mention_first=True, notification_type=None
+        discord_id, message, paraglider_key, mention_first=True, notification_type=None,
+        pilot_channel_id=None, supervisor_channel_id=None,
+        supervisor_user_ids=None, pilot_name=None,
     ):
-        targeted.append((discord_id, message, paraglider_key, mention_first, notification_type))
+        targeted.append((
+            discord_id, message, paraglider_key, mention_first,
+            notification_type, pilot_channel_id, supervisor_channel_id,
+            supervisor_user_ids, pilot_name,
+        ))
 
     async def send_message(message, notification_type=None):
         plain.append((message, notification_type))
@@ -521,6 +530,10 @@ async def test_alert_confirmation_targets_the_paraglider():
         'X-pilot',
         False,
         'alert',
+        456,
+        789,
+        {99},
+        'Pilot',
     )]
     assert plain == []
 
@@ -545,7 +558,8 @@ async def test_clearance_dispatch_uses_clearance_notification_type():
     sent = []
 
     async def post_confirmation(
-        discord_id, message, paraglider_key, mention_first=True, notification_type=None
+        discord_id, message, paraglider_key, mention_first=True, notification_type=None,
+        pilot_channel_id=None,
     ):
         sent.append((discord_id, message, paraglider_key, notification_type))
 
@@ -808,7 +822,8 @@ async def test_alert_without_pilot_discord_id_still_registers_confirmation():
     plain = []
 
     async def post_confirmation(
-        discord_id, message, paraglider_key, mention_first=True, notification_type=None
+        discord_id, message, paraglider_key, mention_first=True, notification_type=None,
+        pilot_channel_id=None,
     ):
         targeted.append((discord_id, message, paraglider_key, mention_first, notification_type))
 
@@ -835,7 +850,7 @@ async def test_alert_without_pilot_discord_id_still_registers_confirmation():
 
 
 @pytest.mark.asyncio
-async def test_admin_confirmation_persists_source_admin():
+async def test_supervisor_confirmation_persists_source_supervisor():
     angel = GuardianAngel.__new__(GuardianAngel)
     angel.logger = get_logger('test')
     angel._stop_monitoring = asyncio.Event()
@@ -865,7 +880,7 @@ async def test_admin_confirmation_persists_source_admin():
     await angel.discord_bot.pending_confirmation_events.put({
         'type': 'landing_confirmed',
         'discord_id': 99,
-        'actor_role': 'admin',
+        'actor_role': 'supervisor',
         'paraglider_key': 'X-pilot',
     })
     await asyncio.sleep(0.05)
@@ -874,4 +889,4 @@ async def test_admin_confirmation_persists_source_admin():
     paraglider.cleanup()
 
     assert paraglider.state == 'Landed'
-    assert persisted == [({'X-pilot': 'Landed'}, 'admin')]
+    assert persisted == [({'X-pilot': 'Landed'}, 'supervisor')]
