@@ -508,6 +508,126 @@ async def test_reaction_acknowledgment_uses_interaction_channel():
 
 
 @pytest.mark.asyncio
+async def test_assistance_acknowledgment_can_be_cancelled_with_thumbs_up():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    bot.discord_channel_id = 55
+    bot.landing_to_be_confirmed = {
+        100: {
+            'discord_id': 7,
+            'paraglider_key': 'X-pilot',
+            'pilot_name': 'Pilot',
+            'notification_type': 'clearance',
+            'supervisor_channel_id': 55,
+            'channel_id': 77,
+            'supervisor_user_ids': {99},
+            'created_at': 1,
+            'message_ids': {100},
+            'completed': False,
+        },
+    }
+    bot._cleanup_expired_confirmations = lambda: None
+    bot._pending_confirmation_events = asyncio.Queue()
+    bot._positive_reaction_emojis = DiscordBot._POSITIVE_REACTION_EMOJIS
+    bot._negative_reaction_emojis = DiscordBot._NEGATIVE_REACTION_EMOJIS
+    bot.msg_negative_response = (
+        "🚨 Your response indicates that you need assistance or are not safe.\n"
+        "The alert remains active. The guardian has been notified.\n\n"
+        "React to this message:\n"
+        "👍 = I am safe and have landed; cancel the assistance request.\n"
+        "👎 = I still need assistance or am not safe."
+    )
+    sent = []
+
+    async def post_message_to_channel(channel_id, message):
+        sent.append((channel_id, message))
+        return 200
+
+    async def post_bye(discord_id, actor_role='pilot', channel_id=None):
+        return None
+
+    async def notify_supervisor(*args):
+        return None
+
+    bot.post_message_to_channel = post_message_to_channel
+    bot.post_bye = post_bye
+    bot._notify_supervisor_alert_acknowledged = notify_supervisor
+
+    await bot._handle_reaction_confirmation(100, 7, '👎', 'Pilot', channel_id=77)
+
+    assert sent[0][0] == 77
+    assert 'not safe.\nThe alert remains active.' in sent[0][1]
+    assert '👍 = I am safe and have landed; cancel the assistance request.' in sent[0][1]
+    assert bot.landing_to_be_confirmed[200]['notification_type'] == 'alert'
+
+    await bot._handle_reaction_confirmation(200, 7, '👍', 'Pilot', channel_id=77)
+
+    rejected = await bot._pending_confirmation_events.get()
+    confirmed = await bot._pending_confirmation_events.get()
+    assert rejected['type'] == 'landing_rejected'
+    assert confirmed['type'] == 'landing_confirmed'
+    assert confirmed['paraglider_key'] == 'X-pilot'
+    assert bot.landing_to_be_confirmed == {}
+
+
+@pytest.mark.asyncio
+async def test_supervisor_alert_acknowledgment_also_notifies_pilot_channel():
+    bot = DiscordBot.__new__(DiscordBot)
+    sent = []
+
+    async def send_message(message, notification_type=None, channel_id=None):
+        sent.append((message, notification_type, channel_id))
+        return len(sent)
+
+    bot.send_message_async = send_message
+    confirmation = {
+        'notification_type': 'alert',
+        'pilot_name': 'Pilot',
+        'pilot_channel_id': 77,
+        'channel_id': 77,
+        'supervisor_channel_id': 55,
+    }
+
+    await bot._notify_supervisor_alert_acknowledged(
+        confirmation,
+        discord_id=99,
+        actor_role='supervisor',
+        acknowledgment_channel_id=55,
+    )
+
+    assert [message[2] for message in sent] == [55, 77]
+    assert 'acknowledged by your angel <@99>' in sent[1][0]
+    assert sent[1][1] == 'acknowledged'
+
+
+@pytest.mark.asyncio
+async def test_supervisor_acknowledgment_does_not_duplicate_in_pilot_channel():
+    bot = DiscordBot.__new__(DiscordBot)
+    sent_channels = []
+
+    async def send_message(message, notification_type=None, channel_id=None):
+        sent_channels.append(channel_id)
+        return len(sent_channels)
+
+    bot.send_message_async = send_message
+
+    await bot._notify_supervisor_alert_acknowledged(
+        {
+            'notification_type': 'alert',
+            'pilot_name': 'Pilot',
+            'pilot_channel_id': 77,
+            'channel_id': 77,
+            'supervisor_channel_id': 55,
+        },
+        discord_id=99,
+        actor_role='supervisor',
+        acknowledgment_channel_id=77,
+    )
+
+    assert sent_channels == [55]
+
+
+@pytest.mark.asyncio
 async def test_startup_notification_uses_neutral_embed():
     bot = DiscordBot.__new__(DiscordBot)
     bot.logger = get_logger('test')
@@ -536,7 +656,7 @@ async def test_startup_notification_uses_neutral_embed():
 async def test_shutdown_notification_uses_neutral_embed():
     bot = DiscordBot.__new__(DiscordBot)
     bot._shutdown_message_sent = False
-    bot.msg_good_bye = 'I will be back soon. Stay safe.'
+    bot.msg_good_bye = 'I will be back soon.'
     bot.supervisor_channels = [55, 56]
     bot.is_ready = lambda: True
     sent_types = []
@@ -562,6 +682,7 @@ async def test_startup_notification_goes_to_each_supervisor_channel():
     bot.supervisor_channels = [55, 56]
     bot._startup_message_sent = False
     bot._ttl_cleanup_task = SimpleNamespace(done=lambda: False)
+    bot.landing_to_be_confirmed = {}
     bot.msg_hello = 'Bot online'
     sent = []
 
@@ -576,6 +697,142 @@ async def test_startup_notification_goes_to_each_supervisor_channel():
         (bot.msg_hello, 'startup', 55),
         (bot.msg_hello, 'startup', 56),
     ]
+
+
+@pytest.mark.asyncio
+async def test_pilot_startup_message_explains_and_registers_problem_signal():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    bot._connection = SimpleNamespace(user=SimpleNamespace(name='Guardian bot'))
+    bot._ready_event = asyncio.Event()
+    bot.supervisor_channels = [55]
+    bot.pilot_startup_prompts = [{
+        'name': 'Pilot',
+        'puretrack_key': 'X-pilot',
+        'discord_user_id': 7,
+        'discord_channel_id': 77,
+        'supervisor_channel_id': 55,
+        'supervisor_user_ids': {99},
+    }]
+    bot._startup_message_sent = False
+    bot._ttl_cleanup_task = SimpleNamespace(done=lambda: False)
+    bot.landing_to_be_confirmed = {}
+    bot.msg_hello = "I'm connected. 🤓\nStay safe."
+    bot.msg_pilot_hello = (
+        "I'm connected. 🤓\n"
+        "At any time, react with 👎 to report a problem and alert your angel.\n"
+        "Stay safe."
+    )
+    sent = []
+
+    async def send_message(message, notification_type=None, channel_id=None):
+        sent.append((message, notification_type, channel_id))
+        return 100 + len(sent)
+
+    bot.send_message_async = send_message
+
+    await bot.on_ready()
+
+    assert sent == [
+        (bot.msg_hello, 'startup', 55),
+        (bot.msg_pilot_hello, 'startup', 77),
+    ]
+    confirmation = bot.landing_to_be_confirmed[102]
+    assert confirmation['notification_type'] == 'report_issue'
+    assert confirmation['discord_id'] == 7
+    assert confirmation['paraglider_key'] == 'X-pilot'
+    assert confirmation['created_at'] is None
+
+
+@pytest.mark.asyncio
+async def test_supervisor_only_startup_prompt_uses_global_channel_and_authorizes_wife():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    bot._connection = SimpleNamespace(user=SimpleNamespace(name='Guardian bot'))
+    bot._ready_event = asyncio.Event()
+    bot.discord_channel_id = 55
+    bot.supervisor_channels = [55]
+    bot.pilot_startup_prompts = [{
+        'name': 'Pilot',
+        'puretrack_key': 'X-pilot',
+        'discord_user_id': None,
+        'discord_channel_id': None,
+        'supervisor_channel_id': None,
+        'supervisor_user_ids': {99},
+    }]
+    bot._startup_message_sent = False
+    bot._ttl_cleanup_task = SimpleNamespace(done=lambda: False)
+    bot.landing_to_be_confirmed = {}
+    bot.msg_hello = "I'm connected. 🤓\nStay safe."
+    bot.msg_pilot_hello = (
+        "I'm connected. 🤓\n"
+        "At any time, react with 👎 to report a problem and alert your angel.\n"
+        "Stay safe."
+    )
+    sent = []
+
+    async def send_message(message, notification_type=None, channel_id=None):
+        sent.append((message, notification_type, channel_id))
+        return 100 + len(sent)
+
+    bot.send_message_async = send_message
+
+    await bot.on_ready()
+
+    assert sent[-1] == (bot.msg_pilot_hello, 'startup', 55)
+    confirmation = bot.landing_to_be_confirmed[102]
+    assert confirmation['discord_id'] is None
+    assert confirmation['supervisor_user_ids'] == {99}
+    assert bot._actor_role_for_confirmation(99, confirmation) == 'supervisor'
+
+
+@pytest.mark.asyncio
+async def test_pilot_can_report_problem_with_thumbs_down_on_startup_message():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    bot.discord_channel_id = 55
+    bot.landing_to_be_confirmed = {
+        100: {
+            'discord_id': 7,
+            'paraglider_key': 'X-pilot',
+            'pilot_name': 'Pilot',
+            'notification_type': 'report_issue',
+            'supervisor_channel_id': 55,
+            'channel_id': 77,
+            'supervisor_user_ids': {99},
+            'created_at': None,
+            'message_ids': {100},
+            'completed': False,
+        },
+    }
+    bot._cleanup_expired_confirmations = lambda: None
+    bot._pending_confirmation_events = asyncio.Queue()
+    bot._positive_reaction_emojis = DiscordBot._POSITIVE_REACTION_EMOJIS
+    bot._negative_reaction_emojis = DiscordBot._NEGATIVE_REACTION_EMOJIS
+    bot.msg_negative_response = (
+        "🚨 Your response indicates that you need assistance or are not safe.\n"
+        "The alert remains active. The guardian has been notified.\n\n"
+        "React to this message:\n"
+        "👍 = I am safe and have landed; cancel the assistance request.\n"
+        "👎 = I still need assistance or am not safe."
+    )
+    sent = []
+
+    async def post_message_to_channel(channel_id, message):
+        sent.append((channel_id, message))
+        return 200
+
+    bot.post_message_to_channel = post_message_to_channel
+
+    await bot._handle_reaction_confirmation(100, 7, '👎', 'Pilot', channel_id=77)
+
+    event = await bot._pending_confirmation_events.get()
+    assert event['type'] == 'assistance_requested'
+    assert event['paraglider_key'] == 'X-pilot'
+    assert 'React to this message:' in sent[0][1]
+    assert 100 in bot.landing_to_be_confirmed
+    assert bot.landing_to_be_confirmed[200]['notification_type'] == 'alert'
+    assert bot.landing_to_be_confirmed[200]['created_at'] is None
 
 
 @pytest.mark.asyncio

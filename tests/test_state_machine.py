@@ -479,6 +479,47 @@ async def test_start_monitoring_uses_discord_configuration(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_alert_reminder_message_keeps_the_pilot_name_clickable():
+    angel = GuardianAngel.__new__(GuardianAngel)
+    angel.logger = get_logger('test')
+    angel._stop_monitoring = asyncio.Event()
+    angel._event_queue = asyncio.Queue()
+    angel._replay = SimpleNamespace(record=lambda event: None)
+    angel._alert_notified = {'X-pilot': True}
+    paraglider = SimpleNamespace(
+        name='Lionel',
+        discord_user_id=123,
+        discord_channel_id=456,
+        supervisor_channel_id=789,
+        puretrack_key='X-pilot',
+        phone_number='',
+        email='',
+    )
+    angel._paragliders = [paraglider]
+    angel.get_paraglider = lambda name: paraglider if name == 'Lionel' else None
+    angel.discord_bot = SimpleNamespace()
+    sent = []
+
+    async def send_message(message, notification_type=None, channel_id=None):
+        sent.append((message, notification_type, channel_id))
+        return 1
+
+    angel.discord_bot.send_message_async = send_message
+
+    task = asyncio.create_task(angel._process_events())
+    await angel._event_queue.put({'type': 'alert', 'payload': {'name': 'Lionel'}})
+    await asyncio.sleep(0.05)
+    angel._stop_monitoring.set()
+    await task
+
+    assert sent == [(
+        '⚠️ Reminder: alert for [Lionel](https://puretrack.io/?l=44.91038,5.19237&z=15&k=X-pilot) is still active.\nPlease respond to the alert prompt or ask your angel for help.',
+        'alert',
+        456,
+    )]
+
+
+@pytest.mark.asyncio
 async def test_alert_confirmation_targets_the_paraglider():
     angel = GuardianAngel.__new__(GuardianAngel)
     angel.logger = get_logger('test')
@@ -536,6 +577,45 @@ async def test_alert_confirmation_targets_the_paraglider():
         'Pilot',
     )]
     assert plain == []
+
+
+@pytest.mark.asyncio
+async def test_alert_cleared_message_does_not_wrap_pilot_name_in_brackets():
+    angel = GuardianAngel.__new__(GuardianAngel)
+    angel.logger = get_logger('test')
+    angel._stop_monitoring = asyncio.Event()
+    angel._event_queue = asyncio.Queue()
+    angel._replay = SimpleNamespace(record=lambda event: None)
+    paraglider = SimpleNamespace(
+        name='Sarah C.',
+        puretrack_key='X-sarah',
+        supervisor_channel_id=789,
+    )
+    angel._paragliders = [paraglider]
+    sent = []
+
+    async def send_message(message, notification_type=None, channel_id=None):
+        sent.append((message, notification_type, channel_id))
+
+    angel.discord_bot = SimpleNamespace(send_message_async=send_message)
+    angel.get_paraglider = lambda name: paraglider if name == 'Sarah C.' else None
+
+    task = asyncio.create_task(angel._process_events())
+    await angel._event_queue.put({
+        'type': 'alert_cleared',
+        'payload': {'name': 'Sarah C.'},
+    })
+    await asyncio.sleep(0.05)
+    angel._stop_monitoring.set()
+    await task
+
+    assert sent == [(
+        '✅ Alert cleared for [Sarah C.]'
+        '(https://puretrack.io/?l=44.91038,5.19237&z=15&k=X-sarah)'
+        ' - the situation is no longer active.',
+        'alert_cleared',
+        789,
+    )]
 
 
 @pytest.mark.asyncio
@@ -752,6 +832,91 @@ async def test_landing_rejected_escalates_supervisor_alert():
     event = angel._event_queue.get_nowait()
     assert event['type'] == 'alert'
     assert event['payload']['reason'] == 'assistance_requested'
+    paraglider.cleanup()
+
+
+def test_pilot_assistance_request_moves_any_state_to_alert():
+    paraglider = Paraglider(
+        {'name': 'Pilot', 'puretrack_key': 'X-pilot'},
+        emit_signals=False,
+        initialize=False,
+    )
+    paraglider._run_initialization()
+    paraglider.cancel_timer()
+    paraglider.restore_state('Flying')
+
+    paraglider.request_assistance()
+
+    assert paraglider.state == 'Alert'
+    paraglider.cleanup()
+
+
+def test_reported_assistance_transitions_state_and_queues_supervisor_alert():
+    angel = GuardianAngel.__new__(GuardianAngel)
+    angel.logger = get_logger('test')
+    angel._event_queue = asyncio.Queue()
+    angel._last_seen_state = {'X-pilot': 'Flying'}
+    angel._paragliders = []
+
+    paraglider = Paraglider(
+        {'name': 'Pilot', 'puretrack_key': 'X-pilot'},
+        emit_signals=False,
+        initialize=False,
+    )
+    paraglider._run_initialization()
+    paraglider.cancel_timer()
+    paraglider.restore_state('Flying')
+    paraglider.alert.connect(angel.on_alert, weak=False)
+    paraglider._emit_signals = True
+    angel._paragliders.append(paraglider)
+
+    state_updates = angel._apply_confirmation_event({
+        'type': 'assistance_requested',
+        'discord_id': 7,
+        'actor_role': 'pilot',
+        'paraglider_key': 'X-pilot',
+    })
+
+    assert paraglider.state == 'Alert'
+    assert state_updates == {'X-pilot': 'Alert'}
+    assert angel._event_queue.get_nowait() == {
+        'type': 'alert',
+        'payload': {'name': 'Pilot', 'reason': 'assistance_requested'},
+    }
+    paraglider.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_positive_confirmation_clears_alert_and_enqueues_clearance_event():
+    angel = GuardianAngel.__new__(GuardianAngel)
+    angel.logger = get_logger('test')
+    angel._event_queue = asyncio.Queue()
+    angel._last_seen_state = {'X-pilot': 'Alert'}
+    angel._paragliders = []
+
+    paraglider = Paraglider({
+        'name': 'Pilot',
+        'puretrack_key': 'X-pilot',
+        'discord_user_id': 7,
+        'phone_number': '',
+        'email': '',
+    }, emit_signals=False, initialize=False)
+    paraglider._run_initialization()
+    paraglider.cancel_timer()
+    paraglider.restore_state('Alert')
+    angel._paragliders.append(paraglider)
+
+    angel._apply_confirmation_event({
+        'type': 'landing_confirmed',
+        'discord_id': 7,
+        'paraglider_key': 'X-pilot',
+        'actor_role': 'pilot',
+    })
+
+    assert paraglider.state == 'Landed'
+    event = angel._event_queue.get_nowait()
+    assert event['type'] == 'alert_cleared'
+    assert event['payload']['name'] == 'Pilot'
     paraglider.cleanup()
 
 

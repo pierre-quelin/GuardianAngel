@@ -37,6 +37,7 @@ It supports:
 * asynchronous monitoring without blocking the Discord client;
 * Discord notifications routed by pilot group;
 * startup and shutdown notifications in each group's supervisor channel;
+* a startup message in each pilot channel explaining how to report a problem at any time with `👎`;
 * targeted Discord alert confirmations for the paraglider;
 * optional delivery of the same landing-confirmation message by Discord DM;
 * landing confirmation replies from the targeted pilot or a supervisor
@@ -49,8 +50,10 @@ It supports:
 * replay of captured events without contacting PureTrack, with an optional
     dry-run mode that disables Discord notifications.
 
-Each group has a supervisor channel and its own list of supervisors; each
-pilot has a channel for landing confirmations and related conversations.
+Each group has a supervisor channel and its own list of supervisors; with a
+flat/minimal configuration, `supervisor_user_ids` can instead be set directly
+on the pilot. Each pilot can have a channel for landing confirmations and
+related conversations; if omitted, the bot's global Discord channel is used.
 Alerts go to the pilot's group's supervisor channel. To also send a copy of a
 confirmation to the pilot by direct message, set `send_confirmation_dm` to
 `true`; DMs remain optional and replies to them are accepted.
@@ -183,17 +186,19 @@ Intents: default + `message_content` + `reactions`.
 | `GUARDIAN ANGEL OFFLINE` | monitoring stop |
 | `TAKE OFF` | entry into state `Flying` (live transition only; not after restore) |
 | `LANDING CHECK` | state `Clearance` — asks the pilot if the landing is OK |
-| `ALERT - NO RESPONSE` | state `Alert` — no reply in time, or loss-of-track path |
+| `ALERT - NO RESPONSE` | state `Alert` — initial supervisor alert and reminder prompt |
+| `ALERT CLEARED` | the alert is no longer active; supervisors are notified once it ends |
 | `ALERT ACKNOWLEDGED` | an alert confirmation was acknowledged by the pilot or a group supervisor |
 | `ASSISTANCE REQUESTED` | pilot replied negatively (`👎` / “I need assistance”) |
 
-Alert and clearance messages include the pilot name, a PureTrack link (`…&k=<puretrack_key>`), and phone/email when present. Alerts are sent to the group's supervisor channel and the pilot's confirmation prompt to their channel. A configured group supervisor can acknowledge even when the pilot has no `discord_user_id`. If the pilot has a `discord_user_id`, they are **mentioned** (and optionally DM’d).
+Alert and clearance messages include the pilot name, a PureTrack link (`…&k=<puretrack_key>`), and phone/email when present. The initial Alert creates a single supervisor notification; reminder cycles keep only the pilot informed until the alert is acknowledged or cleared. A configured group supervisor can acknowledge even when the pilot has no `discord_user_id`. If the pilot has a `discord_user_id`, they are **mentioned** (and optionally DM’d).
 
 **Inbound confirmation** (tied to the PureTrack key of the message, so several pilots can share one Discord user):
 
 * Who may reply: the targeted pilot **or** a supervisor ID listed for the pilot's group. Supervisors can only acknowledge requests for their own group. Others get “not addressed”.
 * Reply on the pilot channel message or on the optional DM: positive (`yes`, `I am safe`, `I am safe and have landed`) → `landingConfirmed()` → `Landed`; negative (`no`, `I need assistance`, `I am not safe`) → Clearance escalates to `Alert`, supervisors get `ASSISTANCE REQUESTED`.
-* Reactions: `👍` / `👌` positive, `👎` negative (skin-tone variants accepted). Handled via `on_raw_reaction_add` so it works if the message is not in cache.
+* After a negative response, the follow-up message explains the next actions. Reacting with `👍` confirms the pilot is safe and landed, cancelling the assistance request and clearing the alert; `👎` confirms assistance is still needed.
+* Reactions: `👍` / `👌` positive, `👎` negative (skin-tone variants accepted). A pilot can also react with `👎` to the startup message at any time to report a problem; the bot raises an alert and sends a follow-up that can be answered with `👍` to cancel the assistance request. Handled via `on_raw_reaction_add` so it works if the message is not in cache.
 * Audit: Discord events carry `actor_role` (`pilot` | `supervisor`); persisted machine-state `source` is `supervisor` when a supervisor acknowledges.
 * Pending confirmations expire after 300 s. Unrecognised replies get a short hint; the original message stays open.
 
