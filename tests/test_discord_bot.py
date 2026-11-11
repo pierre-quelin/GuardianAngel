@@ -1089,6 +1089,68 @@ async def test_confirmation_ttl_cleanup_runs_on_text_reply_path():
 
 
 @pytest.mark.asyncio
+async def test_active_alert_confirmation_survives_ttl_cleanup():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    bot._pending_confirmation_ttl = 1
+    bot.discord_channel_id = 55
+    bot.landing_to_be_confirmed = {}
+    bot.msg_confirmation_instructions = 'Reply 👍 when safe.'
+    bot._ready_event = asyncio.Event()
+    bot._ready_event.set()
+    bot.is_ready = lambda: True
+
+    async def post_message_to_channel(channel_id, message, embed=None):
+        return 100 if embed is not None else 101
+
+    bot.post_message_to_channel = post_message_to_channel
+    await bot.post_waiting_landing_confirmation(
+        7,
+        'Alert for Pilot',
+        'X-pilot',
+        notification_type='alert',
+    )
+
+    confirmation = bot.landing_to_be_confirmed[100]
+    assert confirmation['persistent'] is True
+    assert bot.landing_to_be_confirmed[101] is confirmation
+    confirmation['created_at'] = asyncio.get_running_loop().time() - 10
+
+    bot._cleanup_expired_confirmations()
+
+    assert set(bot.landing_to_be_confirmed) == {100, 101}
+
+
+def test_clearing_alert_removes_its_confirmation_messages_only():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.landing_to_be_confirmed = {}
+    alert_confirmation = {
+        'paraglider_key': 'X-pilot',
+        'notification_type': 'alert',
+        'message_ids': {100, 101},
+        'completed': False,
+    }
+    other_confirmation = {
+        'paraglider_key': 'X-other',
+        'notification_type': 'alert',
+        'message_ids': {200},
+        'completed': False,
+    }
+    bot.landing_to_be_confirmed.update({
+        100: alert_confirmation,
+        101: alert_confirmation,
+        200: other_confirmation,
+    })
+
+    bot.clear_pending_alert_confirmations('X-pilot')
+
+    assert bot.landing_to_be_confirmed == {200: other_confirmation}
+    assert alert_confirmation['completed'] is True
+    assert alert_confirmation['message_ids'] == set()
+    assert other_confirmation['completed'] is False
+
+
+@pytest.mark.asyncio
 async def test_two_pending_confirmations_both_get_bye_on_thumbs_up():
     """First ack must not wipe the second pilot's pending confirmation."""
     bot = DiscordBot.__new__(DiscordBot)

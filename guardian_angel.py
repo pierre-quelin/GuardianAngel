@@ -498,6 +498,9 @@ class GuardianAngel:
                         paraglider = self.get_paraglider(payload.get('name'))
                         if paraglider is not None:
                             getattr(self, '_alert_notified', {}).pop(paraglider.puretrack_key, None)
+                            self.discord_bot.clear_pending_alert_confirmations(
+                                paraglider.puretrack_key
+                            )
                             supervisor_channel_id = (
                                 getattr(paraglider, 'supervisor_channel_id', None)
                                 or self.discord_bot.discord_channel_id

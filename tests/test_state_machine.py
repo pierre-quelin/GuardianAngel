@@ -597,7 +597,15 @@ async def test_alert_cleared_message_does_not_wrap_pilot_name_in_brackets():
     async def send_message(message, notification_type=None, channel_id=None):
         sent.append((message, notification_type, channel_id))
 
-    angel.discord_bot = SimpleNamespace(send_message_async=send_message)
+    cleared_confirmations = []
+
+    def clear_pending_alert_confirmations(paraglider_key):
+        cleared_confirmations.append(paraglider_key)
+
+    angel.discord_bot = SimpleNamespace(
+        send_message_async=send_message,
+        clear_pending_alert_confirmations=clear_pending_alert_confirmations,
+    )
     angel.get_paraglider = lambda name: paraglider if name == 'Sarah C.' else None
 
     task = asyncio.create_task(angel._process_events())
@@ -616,6 +624,7 @@ async def test_alert_cleared_message_does_not_wrap_pilot_name_in_brackets():
         'alert_cleared',
         789,
     )]
+    assert cleared_confirmations == ['X-sarah']
 
 
 @pytest.mark.asyncio

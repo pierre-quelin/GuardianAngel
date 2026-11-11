@@ -38,7 +38,8 @@ It supports:
 * Discord notifications routed by pilot group;
 * startup and shutdown notifications in each group's supervisor channel;
 * a startup message in each pilot channel explaining how to report a problem at any time with `👎`;
-* targeted Discord alert confirmations for the paraglider;
+* targeted Discord alert confirmations that remain valid until the alert is
+    acknowledged or cleared;
 * optional delivery of the same landing-confirmation message by Discord DM;
 * landing confirmation replies from the targeted pilot or a supervisor
     configured for that pilot's group;

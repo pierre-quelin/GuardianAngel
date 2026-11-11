@@ -160,6 +160,19 @@ class DiscordBot(commands.Bot):
         confirmation["message_ids"] = set()
         confirmation['completed'] = True
 
+    def clear_pending_alert_confirmations(self, paraglider_key):
+        confirmations = {
+            id(confirmation): confirmation
+            for confirmation in self.landing_to_be_confirmed.values()
+            if (
+                isinstance(confirmation, dict)
+                and confirmation.get('notification_type') == 'alert'
+                and confirmation.get('paraglider_key') == paraglider_key
+            )
+        }
+        for confirmation in confirmations.values():
+            self._remove_confirmation(confirmation)
+
     @property
     def pending_confirmation_events(self):
         """Public queue of landing confirmation / rejection events."""
@@ -637,6 +650,7 @@ class DiscordBot(commands.Bot):
                 for value in (supervisor_user_ids or [])
                 if self._normalize_discord_id(value) not in (None, 0)
             },
+            'persistent': notification_type == 'alert',
             'created_at': None,
             'message_ids': set(),
             'completed': False,
@@ -791,6 +805,7 @@ class DiscordBot(commands.Bot):
         expired_messages = [
             message_id for message_id, entry in self.landing_to_be_confirmed.items()
             if isinstance(entry, dict)
+            and not entry.get('persistent', False)
             and isinstance(entry.get('created_at'), (int, float))
             and (current_time - entry['created_at']) > self._pending_confirmation_ttl
         ]
