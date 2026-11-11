@@ -37,7 +37,8 @@ It supports:
 * asynchronous monitoring without blocking the Discord client;
 * Discord notifications routed by pilot group;
 * startup and shutdown notifications in each group's supervisor channel;
-* a startup message in each pilot channel explaining how to report a problem at any time with `👎`;
+* a short startup embed in each pilot channel, followed by a separate plain-text
+    instruction message: react with `👎` to that message to report a problem;
 * targeted Discord alert confirmations that remain valid until the alert is
     acknowledged or cleared;
 * optional delivery of the same landing-confirmation message by Discord DM;
@@ -197,9 +198,9 @@ Alert and clearance messages include the pilot name, a PureTrack link (`…&k=<p
 **Inbound confirmation** (tied to the PureTrack key of the message, so several pilots can share one Discord user):
 
 * Who may reply: the targeted pilot **or** a supervisor ID listed for the pilot's group. Supervisors can only acknowledge requests for their own group. Others get “not addressed”.
-* Reply on the pilot channel message or on the optional DM: positive (`yes`, `I am safe`, `I am safe and have landed`) → `landingConfirmed()` → `Landed`; negative (`no`, `I need assistance`, `I am not safe`) → Clearance escalates to `Alert`, supervisors get `ASSISTANCE REQUESTED`.
-* After a negative response, the follow-up message explains the next actions. Reacting with `👍` confirms the pilot is safe and landed, cancelling the assistance request and clearing the alert; `👎` confirms assistance is still needed.
-* Reactions: `👍` / `👌` positive, `👎` negative (skin-tone variants accepted). A pilot can also react with `👎` to the startup message at any time to report a problem; the bot raises an alert and sends a follow-up that can be answered with `👍` to cancel the assistance request. Handled via `on_raw_reaction_add` so it works if the message is not in cache.
+* Reply to or react to the confirmation prompt in the pilot channel or optional DM: positive (`yes`, `I am safe`, `I am safe and have landed`, `👍` / `👌`) → `landingConfirmed()` → `Landed`; negative (`no`, `I need assistance`, `I am not safe`, `👎`) → Clearance escalates to `Alert`, supervisors get `ASSISTANCE REQUESTED`. The prompt defines both reactions.
+* After a negative response, the follow-up message explains the next actions. Replying to or reacting to that follow-up with `👍` confirms the pilot is safe and landed, cancelling the assistance request and clearing the alert; `👎` confirms assistance is still needed.
+* To report a problem at any time, a pilot reacts with `👎` to the separate plain-text instruction message sent at startup (not the startup embed). The bot raises an alert and sends a follow-up that can be answered with `👍` to clear it. Handled via `on_raw_reaction_add` so it works if the message is not in cache.
 * Audit: Discord events carry `actor_role` (`pilot` | `supervisor`); persisted machine-state `source` is `supervisor` when a supervisor acknowledges.
 * Pending confirmations expire after 300 s. Unrecognised replies get a short hint; the original message stays open.
 

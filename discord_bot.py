@@ -51,13 +51,13 @@ class DiscordBot(commands.Bot):
 
         self.msg_hello = "I'm connected. 🤓"
         self.msg_pilot_hello = (
-            "I'm connected. 🤓\n"
-            "At any time, react with 👎 to report a problem and alert your angel.\n"
+            "To report a problem at any time, react 👎 to this message. "
+            "Your angel will be alerted.\n"
             "Stay safe."
         )
         self.msg_good_bye = "I'll be back soon... 😴"
         self.msg_confirmation_instructions = (
-            "Please reply to this message:\n"
+            "To respond, reply to this message or react to it:\n"
             "👍 = I am safe and have landed.\n"
             "👎 = I need assistance or I am not safe."
         )
@@ -69,8 +69,8 @@ class DiscordBot(commands.Bot):
         self.msg_negative_response = (
             "🚨 Your response indicates that you need assistance or are not safe.\n"
             "The alert remains active. The guardian has been notified.\n\n"
-            "React to this message:\n"
-            "👍 = I am safe and have landed; cancel the assistance request.\n"
+            "To update your response, reply to this message or react to it:\n"
+            "👍 = I am safe and have landed; clear the alert.\n"
             "👎 = I still need assistance or am not safe."
         )
         self.msg_not_addressed = "This message was not addressed to you."
@@ -209,15 +209,16 @@ class DiscordBot(commands.Bot):
                     discord_user_id is None and not supervisor_user_ids
                 ):
                     continue
-                message = self.msg_pilot_hello
-                if discord_user_id is None and not supervisor_user_ids:
-                    message = "I'm connected. 🤓\nStay safe."
                 message_id = await self.send_message_async(
-                    message,
+                    self.msg_hello,
                     notification_type='startup',
                     channel_id=channel_id,
                 )
-                if message_id is not None and (
+                instructions_message_id = await self.send_message_async(
+                    self.msg_pilot_hello,
+                    channel_id=channel_id,
+                )
+                if instructions_message_id is not None and (
                     discord_user_id is not None or supervisor_user_ids
                 ):
                     confirmation = {
@@ -232,7 +233,10 @@ class DiscordBot(commands.Bot):
                         'message_ids': set(),
                         'completed': False,
                     }
-                    self._register_confirmation_message(message_id, confirmation)
+                    self._register_confirmation_message(
+                        instructions_message_id,
+                        confirmation,
+                    )
             self._startup_message_sent = True
 
     async def _ttl_cleanup_loop(self):
