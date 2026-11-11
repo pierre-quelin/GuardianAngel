@@ -70,6 +70,7 @@ class Paraglider:
         self._machine.add_transition(trigger='timeout', source='Unknown', dest='Alert')
         self._machine.add_transition(trigger='landingConfirmed', source='Alert', dest='Landed')
         self._machine.add_transition(trigger='timeout', source='Alert', dest='Alert')
+        self._machine.add_transition(trigger='assistanceRequested', source='*', dest='Alert')
         self._machine.add_transition(trigger='landingConfirmed', source='Clearance', dest='Landed')
         self._machine.add_transition(trigger='timeout', source='Clearance', dest='Alert')
 
@@ -171,7 +172,12 @@ class Paraglider:
     def on_enter_Alert(self):
         self._logger.warning(f"Entry action for Alert state for {self.name}")
         if self._emit_signals:
-            self.alert.send(self, message="alert!")
+            assistance_requested = getattr(self, '_assistance_requested', False)
+            self.alert.send(
+                self,
+                message='assistance_requested' if assistance_requested else 'alert!',
+            )
+        self._assistance_requested = False
         self.arm_timer(self._sm['alert_repeat_timeout_s'])
 
     def on_enter_Disconnected(self):
@@ -184,6 +190,11 @@ class Paraglider:
 
     def on_exit_Disconnected(self):
         self.cancel_timer()
+
+    def request_assistance(self):
+        """Escalate a pilot-reported problem to Alert."""
+        self._assistance_requested = True
+        self.assistanceRequested()
 
     @property
     def has_recent_data(self):

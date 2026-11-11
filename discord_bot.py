@@ -12,6 +12,7 @@ class DiscordBot(commands.Bot):
         'takeoff': ('TAKE OFF', 0x3498DB),
         'clearance': ('LANDING CHECK', 0x2ECC71),
         'alert': ('ALERT - NO RESPONSE', 0xD97706),
+        'alert_cleared': ('ALERT CLEARED', 0x27AE60),
         'acknowledged': ('ALERT ACKNOWLEDGED', 0x27AE60),
         'assistance': ('ASSISTANCE REQUESTED', 0xC0392B),
     }
@@ -40,6 +41,7 @@ class DiscordBot(commands.Bot):
             for channel_id in (cfg.get('supervisor_channels') or [])
             if self._normalize_discord_id(channel_id) not in (None, 0)
         ))
+        self.pilot_startup_prompts = list(cfg.get('pilot_startup_prompts') or [])
         if not self.supervisor_channels and self.discord_channel_id not in (None, 0, '0'):
             self.supervisor_channels = [self._normalize_discord_id(self.discord_channel_id)]
         self.send_confirmation_dm = cfg.get('send_confirmation_dm', False)
@@ -47,21 +49,29 @@ class DiscordBot(commands.Bot):
         self._send_max_retries = int(cfg.get('send_max_retries', 3))
         self._send_base_backoff = float(cfg.get('send_base_backoff', 1.0))
 
-        self.msg_hello = "I'm connected. 🤓\nStay safe."
-        self.msg_good_bye = "I'll be back soon... 😴\nStay safe."
+        self.msg_hello = "I'm connected. 🤓"
+        self.msg_pilot_hello = (
+            "To report a problem at any time, react 👎 to this message. "
+            "Your angel will be alerted.\n"
+            "Stay safe."
+        )
+        self.msg_good_bye = "I'll be back soon... 😴"
         self.msg_confirmation_instructions = (
-            "Please reply to this message:\n"
+            "To respond, reply to this message or react to it:\n"
             "👍 = I am safe and have landed.\n"
             "👎 = I need assistance or I am not safe."
         )
         self.msg_waiting_landing_confirmation = self.msg_confirmation_instructions
         self.msg_bye = "✅ Thank you {mention}. Your response has been recorded."
         self.msg_bye_supervisor = (
-            "✅ Thank you {mention}. Response recorded by the supervisor for the pilot."
+            "✅ Thank you {mention}. Response recorded by your angel."
         )
         self.msg_negative_response = (
-            "🚨 Your response indicates that you need assistance or are not safe. "
-            "The alert remains active. The guardian has been notified."
+            "🚨 Your response indicates that you need assistance or are not safe.\n"
+            "The alert remains active. The guardian has been notified.\n\n"
+            "To update your response, reply to this message or react to it:\n"
+            "👍 = I am safe and have landed; clear the alert.\n"
+            "👎 = I still need assistance or am not safe."
         )
         self.msg_not_addressed = "This message was not addressed to you."
         self.msg_unrecognized_response = (
@@ -150,6 +160,19 @@ class DiscordBot(commands.Bot):
         confirmation["message_ids"] = set()
         confirmation['completed'] = True
 
+    def clear_pending_alert_confirmations(self, paraglider_key):
+        confirmations = {
+            id(confirmation): confirmation
+            for confirmation in self.landing_to_be_confirmed.values()
+            if (
+                isinstance(confirmation, dict)
+                and confirmation.get('notification_type') == 'alert'
+                and confirmation.get('paraglider_key') == paraglider_key
+            )
+        }
+        for confirmation in confirmations.values():
+            self._remove_confirmation(confirmation)
+
     @property
     def pending_confirmation_events(self):
         """Public queue of landing confirmation / rejection events."""
@@ -167,6 +190,53 @@ class DiscordBot(commands.Bot):
                     notification_type='startup',
                     channel_id=channel_id,
                 )
+            for pilot in getattr(self, 'pilot_startup_prompts', []):
+                channel_id = (
+                    pilot.get('discord_channel_id')
+                    or self.discord_channel_id
+                )
+                discord_user_id = self._normalize_discord_id(
+                    pilot.get('discord_user_id')
+                )
+                if discord_user_id in (None, 0, '0', ''):
+                    discord_user_id = None
+                supervisor_user_ids = {
+                    self._normalize_discord_id(value)
+                    for value in (pilot.get('supervisor_user_ids') or [])
+                    if self._normalize_discord_id(value) not in (None, 0, '0', '')
+                }
+                if channel_id is None or (
+                    discord_user_id is None and not supervisor_user_ids
+                ):
+                    continue
+                message_id = await self.send_message_async(
+                    self.msg_hello,
+                    notification_type='startup',
+                    channel_id=channel_id,
+                )
+                instructions_message_id = await self.send_message_async(
+                    self.msg_pilot_hello,
+                    channel_id=channel_id,
+                )
+                if instructions_message_id is not None and (
+                    discord_user_id is not None or supervisor_user_ids
+                ):
+                    confirmation = {
+                        'discord_id': discord_user_id,
+                        'paraglider_key': pilot.get('puretrack_key'),
+                        'pilot_name': pilot.get('name'),
+                        'notification_type': 'report_issue',
+                        'supervisor_channel_id': pilot.get('supervisor_channel_id'),
+                        'channel_id': channel_id,
+                        'supervisor_user_ids': supervisor_user_ids,
+                        'created_at': None,
+                        'message_ids': set(),
+                        'completed': False,
+                    }
+                    self._register_confirmation_message(
+                        instructions_message_id,
+                        confirmation,
+                    )
             self._startup_message_sent = True
 
     async def _ttl_cleanup_loop(self):
@@ -215,6 +285,9 @@ class DiscordBot(commands.Bot):
                     if actor_role is not None:
                         response = self._normalize_reply_text(message.content)
                         if self._is_positive_reply(response):
+                            if confirmation.get('notification_type') == 'report_issue':
+                                await self.process_commands(message)
+                                return
                             self.logger.info(
                                 "User %s (%s) replied to the specific message: %s",
                                 message.author.name,
@@ -243,12 +316,19 @@ class DiscordBot(commands.Bot):
                                     channel_id=reply_channel_id,
                                 )
                             await self._notify_supervisor_alert_acknowledged(
-                                confirmation, author_id, actor_role
+                                confirmation,
+                                author_id,
+                                actor_role,
+                                reply_channel_id,
                             )
                             self._remove_confirmation(confirmation)
                         elif self._is_negative_reply(response):
                             await self._pending_confirmation_events.put({
-                                'type': 'landing_rejected',
+                                'type': (
+                                    'assistance_requested'
+                                    if confirmation.get('notification_type') == 'report_issue'
+                                    else 'landing_rejected'
+                                ),
                                 'discord_id': author_id,
                                 'actor_role': actor_role,
                                 'paraglider_key': confirmation.get('paraglider_key'),
@@ -259,13 +339,19 @@ class DiscordBot(commands.Bot):
                                 or confirmation.get('channel_id')
                             )
                             if reply_channel_id is None:
-                                await self.post_negative_acknowledgment(author_id)
+                                acknowledgment_id = await self.post_negative_acknowledgment(author_id)
                             else:
-                                await self.post_negative_acknowledgment(
+                                acknowledgment_id = await self.post_negative_acknowledgment(
                                     author_id,
                                     channel_id=reply_channel_id,
                                 )
-                            self._remove_confirmation(confirmation)
+                            self._register_assistance_cancel_confirmation(
+                                acknowledgment_id,
+                                confirmation,
+                                reply_channel_id,
+                            )
+                            if confirmation.get('notification_type') != 'report_issue':
+                                self._remove_confirmation(confirmation)
                         else:
                             if confirmation.get('channel_id') or self.discord_channel_id is not None:
                                 await self._post_unrecognized_response(
@@ -331,6 +417,9 @@ class DiscordBot(commands.Bot):
             return
 
         is_positive = normalized_emoji in positive
+        is_report_issue = confirmation.get('notification_type') == 'report_issue'
+        if is_positive and is_report_issue:
+            return
         self.logger.info(
             "User %s (%s) %s message %s (paraglider_key=%s)",
             user_name,
@@ -340,7 +429,11 @@ class DiscordBot(commands.Bot):
             confirmation.get('paraglider_key'),
         )
         await self._pending_confirmation_events.put({
-            'type': 'landing_confirmed' if is_positive else 'landing_rejected',
+            'type': (
+                'landing_confirmed' if is_positive
+                else 'assistance_requested' if is_report_issue
+                else 'landing_rejected'
+            ),
             'discord_id': user_id,
             'actor_role': actor_role,
             'paraglider_key': confirmation.get('paraglider_key'),
@@ -357,21 +450,49 @@ class DiscordBot(commands.Bot):
                     channel_id=reply_channel_id,
                 )
             await self._notify_supervisor_alert_acknowledged(
-                confirmation, user_id, actor_role
+                confirmation,
+                user_id,
+                actor_role,
+                reply_channel_id,
             )
         else:
             reply_channel_id = channel_id or confirmation.get('channel_id')
             if reply_channel_id is None:
-                await self.post_negative_acknowledgment(user_id)
+                acknowledgment_id = await self.post_negative_acknowledgment(user_id)
             else:
-                await self.post_negative_acknowledgment(
+                acknowledgment_id = await self.post_negative_acknowledgment(
                     user_id,
                     channel_id=reply_channel_id,
                 )
-        self._remove_confirmation(confirmation)
+            self._register_assistance_cancel_confirmation(
+                acknowledgment_id,
+                confirmation,
+                reply_channel_id,
+            )
+        if not is_report_issue:
+            self._remove_confirmation(confirmation)
+
+    def _register_assistance_cancel_confirmation(
+        self, message_id, confirmation, channel_id=None
+    ):
+        if message_id is None or not isinstance(confirmation, dict):
+            return
+        follow_up = {
+            **confirmation,
+            'channel_id': channel_id or confirmation.get('channel_id'),
+            'notification_type': 'alert',
+            'created_at': (
+                None
+                if confirmation.get('notification_type') == 'report_issue'
+                else asyncio.get_running_loop().time()
+            ),
+            'message_ids': set(),
+            'completed': False,
+        }
+        self._register_confirmation_message(message_id, follow_up)
 
     async def _notify_supervisor_alert_acknowledged(
-        self, confirmation, discord_id, actor_role
+        self, confirmation, discord_id, actor_role, acknowledgment_channel_id=None
     ):
         if confirmation.get('notification_type') != 'alert':
             return None
@@ -389,11 +510,27 @@ class DiscordBot(commands.Bot):
 
         pilot_name = confirmation.get('pilot_name') or confirmation.get('paraglider_key')
         actor_label = 'supervisor' if actor_role == 'supervisor' else 'pilot'
-        return await self.send_message_async(
+        supervisor_message_id = await self.send_message_async(
             f"✅ Alert for **{pilot_name}** acknowledged by {actor_label} <@{discord_id}>.",
             notification_type='acknowledged',
             channel_id=channel_id,
         )
+        pilot_channel_id = (
+            confirmation.get('pilot_channel_id')
+            or confirmation.get('channel_id')
+        )
+        if (
+            actor_role == 'supervisor'
+            and pilot_channel_id is not None
+            and pilot_channel_id != channel_id
+            and pilot_channel_id != acknowledgment_channel_id
+        ):
+            await self.send_message_async(
+                f"✅ Your alert was acknowledged by your angel <@{discord_id}>.",
+                notification_type='acknowledged',
+                channel_id=pilot_channel_id,
+            )
+        return supervisor_message_id
 
     async def _post_unrecognized_response(self, discord_id, confirmation):
         message_id = await self.post_message_to_channel(
@@ -508,6 +645,7 @@ class DiscordBot(commands.Bot):
             'supervisor_channel_id': (
                 supervisor_channel_id or self.discord_channel_id
             ),
+            'pilot_channel_id': pilot_channel_id,
             'channel_id': (
                 pilot_channel_id or supervisor_channel_id or self.discord_channel_id
             ),
@@ -516,6 +654,7 @@ class DiscordBot(commands.Bot):
                 for value in (supervisor_user_ids or [])
                 if self._normalize_discord_id(value) not in (None, 0)
             },
+            'persistent': notification_type == 'alert',
             'created_at': None,
             'message_ids': set(),
             'completed': False,
@@ -631,7 +770,7 @@ class DiscordBot(commands.Bot):
 
     async def post_negative_acknowledgment(self, discord_id, channel_id=None):
         self.logger.info(f"post_negative_acknowledgment discord_id {discord_id}")
-        await self.post_message_to_channel(
+        return await self.post_message_to_channel(
             channel_id or self.discord_channel_id,
             f"<@{discord_id}> " + self.msg_negative_response,
         )
@@ -670,6 +809,7 @@ class DiscordBot(commands.Bot):
         expired_messages = [
             message_id for message_id, entry in self.landing_to_be_confirmed.items()
             if isinstance(entry, dict)
+            and not entry.get('persistent', False)
             and isinstance(entry.get('created_at'), (int, float))
             and (current_time - entry['created_at']) > self._pending_confirmation_ttl
         ]
