@@ -27,6 +27,13 @@ class Paraglider:
         self.name = cfg.get('name')
         self.puretrack_key = cfg.get('puretrack_key')
         self.discord_user_id = cfg.get('discord_user_id')
+        self.discord_channel_id = cfg.get('discord_channel_id') or None
+        self.supervisor_channel_id = cfg.get('supervisor_channel_id') or None
+        self.supervisor_user_ids = {
+            int(value) for value in (cfg.get('supervisor_user_ids') or [])
+            if value not in (None, '', 0, '0')
+        }
+        self.group_name = cfg.get('group_name')
         self.phone_number = cfg.get('phone_number')
         self.email = cfg.get('email')
         sm = dict(DEFAULT_STATE_MACHINE)
@@ -63,6 +70,7 @@ class Paraglider:
         self._machine.add_transition(trigger='timeout', source='Unknown', dest='Alert')
         self._machine.add_transition(trigger='landingConfirmed', source='Alert', dest='Landed')
         self._machine.add_transition(trigger='timeout', source='Alert', dest='Alert')
+        self._machine.add_transition(trigger='assistanceRequested', source='*', dest='Alert')
         self._machine.add_transition(trigger='landingConfirmed', source='Clearance', dest='Landed')
         self._machine.add_transition(trigger='timeout', source='Clearance', dest='Alert')
 
@@ -164,7 +172,12 @@ class Paraglider:
     def on_enter_Alert(self):
         self._logger.warning(f"Entry action for Alert state for {self.name}")
         if self._emit_signals:
-            self.alert.send(self, message="alert!")
+            assistance_requested = getattr(self, '_assistance_requested', False)
+            self.alert.send(
+                self,
+                message='assistance_requested' if assistance_requested else 'alert!',
+            )
+        self._assistance_requested = False
         self.arm_timer(self._sm['alert_repeat_timeout_s'])
 
     def on_enter_Disconnected(self):
@@ -177,6 +190,11 @@ class Paraglider:
 
     def on_exit_Disconnected(self):
         self.cancel_timer()
+
+    def request_assistance(self):
+        """Escalate a pilot-reported problem to Alert."""
+        self._assistance_requested = True
+        self.assistanceRequested()
 
     @property
     def has_recent_data(self):

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from datetime import datetime, timezone
 
 import database as db
@@ -23,6 +24,7 @@ class GuardianAngel:
         self._confirmation_task = None
         self._monitor_task = None
         self._last_seen_state = {}
+        self._alert_notified = {}
         self._capture_replay = None
         self._state_machine_cfg = cfg.get('state_machine') or {}
         self._avg_speed_window_min = int(self._state_machine_cfg.get('avg_speed_window_min', 5))
@@ -30,8 +32,13 @@ class GuardianAngel:
         self.discord_bot_cfg = cfg.get('discord_bot') or (
             self.puretrack_site_cfg.get('discord_bot', {}) if self.puretrack_site_cfg else {}
         )
-        self.administrators = list(cfg.get('administrators') or [])
         self.puretrack_grp = self.puretrack_site_cfg.get('group') if self.puretrack_site_cfg else None
+        self.groups = list(cfg.get('groups') or [])
+        self.supervisor_channels = list(dict.fromkeys(
+            group.get('supervisor_channel_id')
+            for group in self.groups
+            if group.get('supervisor_channel_id') not in (None, '', 0, '0')
+        ))
         if cfg.get('capture_events', False):
             self._capture_replay = EventReplay(cfg.get('capture_file', 'data/puretrack_events.json'))
 
@@ -41,37 +48,85 @@ class GuardianAngel:
         # stays off the constructor / event-loop thread.
         self._fetch_remote_group_requested = fetch_remote_group
 
-        for paraglider_cfg in cfg.get('paragliders') or []:
-            self.add_paraglider(paraglider_cfg)
+        if self.groups:
+            for group in self.groups:
+                group_cfg = {
+                    'group_name': group.get('name'),
+                    'supervisor_channel_id': group.get('supervisor_channel_id'),
+                    'supervisor_user_ids': group.get('supervisor_user_ids') or [],
+                }
+                for paraglider_cfg in group.get('pilots') or []:
+                    self.add_paraglider({**group_cfg, **paraglider_cfg})
+        else:
+            # Support existing flat configs during migration; supervisor IDs may
+            # be configured directly on each pilot.
+            for paraglider_cfg in cfg.get('paragliders') or []:
+                self.add_paraglider(paraglider_cfg)
 
-    async def sync_group_from_puretrack(self, output_path='cfg/group.json'):
-        """Fetch PureTrack group members off the event loop and write group.json."""
+    async def sync_group_from_puretrack(self, output_path='cfg/group.json', force=False):
+        """Create a grouped configuration template from the PureTrack group."""
         if not self.puretrack_grp:
             self.logger.warning("No PureTrack group configured; skipping remote group sync")
             return None
+
+        if not force and os.path.exists(output_path):
+            with open(output_path, 'r', encoding='utf-8') as handle:
+                existing = json.load(handle)
+            existing_groups = existing.get('groups') if isinstance(existing, dict) else None
+            if isinstance(existing_groups, list) and existing_groups and all(
+                isinstance(group, dict)
+                and isinstance(group.get('pilots'), list)
+                and 0 < len(group['pilots']) <= 8
+                for group in existing_groups
+            ):
+                self.logger.info(
+                    "Keeping existing group template at %s; use --sync-group to regenerate it",
+                    output_path,
+                )
+                return existing_groups
 
         grp = await ptrk.get_puretrack_group_async(self.puretrack_grp)
         if not grp or not grp.get('members'):
             self.logger.error("Failed to fetch PureTrack group %s", self.puretrack_grp)
             return None
 
-        config = []
-        for paraglider in grp.get('members'):
-            config.append({
-                "name": paraglider.get('label'),
+        pilots = [
+            {
+                "name": paraglider.get('label') or f"Pilot {index + 1}",
                 "puretrack_key": paraglider.get('key'),
                 "discord_user_id": 0,
-                "phone_number": "+33700000000",
+                "discord_channel_id": 0,
+                "phone_number": "",
                 "email": "",
+            }
+            for index, paraglider in enumerate(grp['members'])
+        ]
+        groups = []
+        for index in range(0, len(pilots), 8):
+            groups.append({
+                "name": f"Ange {index // 8 + 1}",
+                "supervisor_channel_id": 0,
+                "supervisor_user_ids": [],
+                "pilots": pilots[index:index + 8],
             })
+        template = {"groups": groups}
 
         def _write():
+            directory = os.path.dirname(output_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
             with open(output_path, 'w', encoding='utf-8') as handle:
-                json.dump(config, handle, indent=4)
+                json.dump(template, handle, indent=4, ensure_ascii=False)
+                handle.write("\n")
 
         await asyncio.to_thread(_write)
-        self.logger.info("Synced %s PureTrack members to %s", len(config), output_path)
-        return config
+        self.logger.info(
+            "Created %s pilot groups (%s pilots) from PureTrack at %s",
+            len(groups),
+            len(pilots),
+            output_path,
+        )
+        return groups
 
     def add_paraglider(self, cfg):
         paraglider_cfg = dict(cfg)
@@ -149,13 +204,35 @@ class GuardianAngel:
         if self._event_task is None:
             self._event_task = asyncio.create_task(self._process_events())
         if self.discord_bot is None and self.discord_bot_cfg is not None:
+            supervisor_channels = getattr(self, 'supervisor_channels', [])
             self.logger.info(
-                "Starting Discord bot with discord_channel_id=%s",
-                self.discord_bot_cfg.get('discord_channel_id'),
+                "Starting Discord bot with supervisor channels=%s",
+                supervisor_channels,
             )
             bot_cfg = dict(self.discord_bot_cfg)
             bot_cfg.setdefault('puretrack_group', self.puretrack_grp)
-            bot_cfg['administrators'] = getattr(self, 'administrators', []) or []
+            channels = supervisor_channels or [
+                bot_cfg.get('discord_channel_id')
+            ]
+            bot_cfg['supervisor_channels'] = [
+                channel_id for channel_id in channels
+                if channel_id not in (None, '', 0, '0')
+            ]
+            bot_cfg['pilot_startup_prompts'] = [
+                {
+                    'name': paraglider.name,
+                    'puretrack_key': paraglider.puretrack_key,
+                    'discord_user_id': paraglider.discord_user_id,
+                    'discord_channel_id': paraglider.discord_channel_id,
+                    'supervisor_channel_id': paraglider.supervisor_channel_id,
+                    'supervisor_user_ids': paraglider.supervisor_user_ids,
+                }
+                for paraglider in self._paragliders
+                if (
+                    paraglider.discord_channel_id is not None
+                    or bot_cfg.get('discord_channel_id') not in (None, '', 0, '0')
+                )
+            ]
             self.discord_bot = DiscordBot(bot_cfg)
             self._discord_task = asyncio.create_task(self.discord_bot.start_async())
             self._confirmation_task = asyncio.create_task(self._handle_confirmation_events())
@@ -227,7 +304,9 @@ class GuardianAngel:
             state_updates = self._apply_confirmation_event(event)
             if state_updates:
                 persist_source = (
-                    'admin' if event.get('actor_role') == 'admin' else 'discord'
+                    'supervisor'
+                    if event.get('actor_role') == 'supervisor'
+                    else 'discord'
                 )
                 await asyncio.to_thread(
                     self._persist_paraglider_states,
@@ -249,8 +328,17 @@ class GuardianAngel:
             matched = False
             for paraglider in self._paragliders:
                 if paraglider.puretrack_key == paraglider_key:
+                    self._last_seen_state = getattr(self, '_last_seen_state', {})
+                    previous_state = paraglider.state
+                    self._last_seen_state[paraglider.puretrack_key] = previous_state
                     paraglider.landingConfirmed()
                     state_updates[paraglider.puretrack_key] = paraglider.state
+                    self._queue_state_event_if_changed(paraglider)
+                    if previous_state == 'Alert' and paraglider.state != 'Alert':
+                        self.logger.info(
+                            "Alert cleared after positive confirmation for %s",
+                            paraglider.name,
+                        )
                     matched = True
                     break
             if not matched:
@@ -285,6 +373,19 @@ class GuardianAngel:
                     "Landing rejection ignored: unknown PureTrack key %s",
                     paraglider_key,
                 )
+        elif event_type == 'assistance_requested':
+            matched = False
+            for paraglider in self._paragliders:
+                if paraglider.puretrack_key == paraglider_key:
+                    paraglider.request_assistance()
+                    state_updates[paraglider.puretrack_key] = paraglider.state
+                    matched = True
+                    break
+            if not matched:
+                self.logger.warning(
+                    "Assistance request ignored: unknown PureTrack key %s",
+                    paraglider_key,
+                )
         return state_updates
 
     async def _process_events(self):
@@ -300,12 +401,37 @@ class GuardianAngel:
             if event_type == 'alert':
                 self.logger.info("Processing alert event for %s", payload.get('name'))
                 await asyncio.to_thread(self._replay.record, {'type': event_type, 'payload': payload})
+                if not hasattr(self, '_alert_notified'):
+                    self._alert_notified = {}
                 if self.discord_bot is not None:
                     self.logger.info("Dispatching alert event for %s", payload.get('name'))
                     try:
                         paraglider = self.get_paraglider(payload.get('name'))
                         reason = payload.get('reason')
+                        alert_notified = getattr(self, '_alert_notified', {})
+                        is_repeat = bool(
+                            paraglider is not None
+                            and alert_notified.get(paraglider.puretrack_key, False)
+                            and reason != 'assistance_requested'
+                        )
+                        if is_repeat:
+                            if paraglider.discord_channel_id is not None:
+                                reminder_message = (
+                                    f"⚠️ Reminder: alert for [{paraglider.name}]"
+                                    f"(https://puretrack.io/?l=44.91038,5.19237&z=15"
+                                    f"&k={paraglider.puretrack_key}) is still active.\n"
+                                    "Please respond to the alert prompt or ask your angel for help."
+                                )
+                                await self.discord_bot.send_message_async(
+                                    reminder_message,
+                                    notification_type='alert',
+                                    channel_id=paraglider.discord_channel_id,
+                                )
+                            continue
                         if paraglider is not None:
+                            getattr(self, '_alert_notified', {}).update({
+                                paraglider.puretrack_key: True,
+                            })
                             prefix = "🚨 Assistance requested for" if reason == 'assistance_requested' else "⚠️ Alert for"
                             message = (
                                 f"{prefix} [{paraglider.name}]"
@@ -322,17 +448,41 @@ class GuardianAngel:
                         else:
                             message = f"Alert for {payload.get('name')}"
                         if reason == 'assistance_requested':
-                            await self.discord_bot.send_message_async(
-                                message,
-                                notification_type='assistance',
+                            send_options = {'notification_type': 'assistance'}
+                            supervisor_channel_id = (
+                                getattr(paraglider, 'supervisor_channel_id', None)
+                                if paraglider is not None else None
                             )
+                            if supervisor_channel_id is not None:
+                                send_options['channel_id'] = supervisor_channel_id
+                            await self.discord_bot.send_message_async(message, **send_options)
                         elif paraglider is not None:
+                            confirmation_options = {
+                                'mention_first': False,
+                                'notification_type': 'alert',
+                            }
+                            pilot_channel_id = getattr(
+                                paraglider, 'discord_channel_id', None
+                            )
+                            if pilot_channel_id is not None:
+                                confirmation_options['pilot_channel_id'] = pilot_channel_id
+                            supervisor_channel_id = getattr(
+                                paraglider, 'supervisor_channel_id', None
+                            )
+                            supervisor_user_ids = getattr(
+                                paraglider, 'supervisor_user_ids', set()
+                            )
+                            if supervisor_channel_id is not None or supervisor_user_ids:
+                                confirmation_options.update({
+                                    'supervisor_channel_id': supervisor_channel_id,
+                                    'supervisor_user_ids': supervisor_user_ids,
+                                    'pilot_name': paraglider.name,
+                                })
                             await self.discord_bot.post_waiting_landing_confirmation(
                                 paraglider.discord_user_id or None,
                                 message,
                                 paraglider.puretrack_key,
-                                mention_first=False,
-                                notification_type='alert',
+                                **confirmation_options,
                             )
                         else:
                             await self.discord_bot.send_message_async(
@@ -341,6 +491,30 @@ class GuardianAngel:
                             )
                     except Exception as exc:
                         self.logger.exception("Failed to send alert Discord message: %s", exc)
+            elif event_type == 'alert_cleared':
+                self.logger.info("Processing alert clear event for %s", payload.get('name'))
+                if self.discord_bot is not None:
+                    try:
+                        paraglider = self.get_paraglider(payload.get('name'))
+                        if paraglider is not None:
+                            getattr(self, '_alert_notified', {}).pop(paraglider.puretrack_key, None)
+                            self.discord_bot.clear_pending_alert_confirmations(
+                                paraglider.puretrack_key
+                            )
+                            supervisor_channel_id = (
+                                getattr(paraglider, 'supervisor_channel_id', None)
+                                or self.discord_bot.discord_channel_id
+                            )
+                            if supervisor_channel_id is not None:
+                                await self.discord_bot.send_message_async(
+                                    f"✅ Alert cleared for [{paraglider.name}]"
+                                    f"(https://puretrack.io/?l=44.91038,5.19237&z=15"
+                                    f"&k={paraglider.puretrack_key}) - the situation is no longer active.",
+                                    notification_type='alert_cleared',
+                                    channel_id=supervisor_channel_id,
+                                )
+                    except Exception as exc:
+                        self.logger.exception("Failed to send alert clear Discord message: %s", exc)
             elif event_type == 'clearance':
                 self.logger.info("Processing clearance event for %s", payload.get('name'))
                 await asyncio.to_thread(self._replay.record, {'type': event_type, 'payload': payload})
@@ -360,11 +534,29 @@ class GuardianAngel:
                         else:
                             message = f"Clearance for {payload.get('name')}"
                         if paraglider is not None:
+                            confirmation_options = {'notification_type': 'clearance'}
+                            pilot_channel_id = getattr(
+                                paraglider, 'discord_channel_id', None
+                            )
+                            if pilot_channel_id is not None:
+                                confirmation_options['pilot_channel_id'] = pilot_channel_id
+                            supervisor_channel_id = getattr(
+                                paraglider, 'supervisor_channel_id', None
+                            )
+                            supervisor_user_ids = getattr(
+                                paraglider, 'supervisor_user_ids', set()
+                            )
+                            if supervisor_channel_id is not None or supervisor_user_ids:
+                                confirmation_options.update({
+                                    'supervisor_channel_id': supervisor_channel_id,
+                                    'supervisor_user_ids': supervisor_user_ids,
+                                    'pilot_name': paraglider.name,
+                                })
                             await self.discord_bot.post_waiting_landing_confirmation(
                                 paraglider.discord_user_id or None,
                                 message,
                                 paraglider.puretrack_key,
-                                notification_type='clearance',
+                                **confirmation_options,
                             )
                         else:
                             await self.discord_bot.send_message_async(
@@ -388,10 +580,14 @@ class GuardianAngel:
                             )
                         else:
                             message = f"Take off for {payload.get('name')}"
-                        await self.discord_bot.send_message_async(
-                            message,
-                            notification_type='takeoff',
+                        send_options = {'notification_type': 'takeoff'}
+                        supervisor_channel_id = (
+                            getattr(paraglider, 'supervisor_channel_id', None)
+                            if paraglider is not None else None
                         )
+                        if supervisor_channel_id is not None:
+                            send_options['channel_id'] = supervisor_channel_id
+                        await self.discord_bot.send_message_async(message, **send_options)
                     except Exception as exc:
                         self.logger.exception("Failed to send takeoff Discord message: %s", exc)
 
@@ -539,10 +735,17 @@ class GuardianAngel:
         self._queue_state_event_if_changed(paraglider)
 
     def _queue_state_event_if_changed(self, paraglider):
+        if not hasattr(self, '_last_seen_state'):
+            self._last_seen_state = {}
         state_key = paraglider.state
         previous_state = self._last_seen_state.get(paraglider.puretrack_key)
         if previous_state == state_key:
             return False
+
+        if previous_state == 'Alert' and state_key != 'Alert':
+            self._last_seen_state[paraglider.puretrack_key] = state_key
+            self._enqueue_event({'type': 'alert_cleared', 'payload': {'name': paraglider.name}})
+            return True
 
         self._last_seen_state[paraglider.puretrack_key] = state_key
         if state_key in {'Alert', 'Clearance'}:
@@ -551,9 +754,12 @@ class GuardianAngel:
             return True
         return False
 
-    def _queue_alert_occurrence(self, paraglider):
+    def _queue_alert_occurrence(self, paraglider, reason=None):
         self._last_seen_state[paraglider.puretrack_key] = paraglider.state
-        self._enqueue_event({'type': 'alert', 'payload': {'name': paraglider.name}})
+        payload = {'name': paraglider.name}
+        if reason is not None:
+            payload['reason'] = reason
+        self._enqueue_event({'type': 'alert', 'payload': payload})
 
     def update_state_from_discord(self, name, message):
         paraglider = self.get_paraglider(name)
@@ -562,6 +768,8 @@ class GuardianAngel:
                 paraglider.landingConfirmed()
 
     def _enqueue_event(self, event):
+        if not hasattr(self, '_event_queue'):
+            return
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -577,7 +785,8 @@ class GuardianAngel:
         self._event_queue.put_nowait(event)
     def on_alert(self, sender, message):
         self.logger.info(f"Alert signal received from {sender.name}")
-        self._queue_alert_occurrence(sender)
+        reason = 'assistance_requested' if message == 'assistance_requested' else None
+        self._queue_alert_occurrence(sender, reason=reason)
 
     def on_clearance(self, sender, message):
         self.logger.info(
