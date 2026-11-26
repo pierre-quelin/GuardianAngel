@@ -191,6 +191,15 @@ class Paraglider:
     def on_exit_Disconnected(self):
         self.cancel_timer()
 
+    def on_enter_Landed(self):
+        # Refresh the last-seen timestamp so a stale GPS track does not
+        # immediately drive the pilot back through Disconnected → Alert
+        # after a landing confirmation.  The grace window equals
+        # max_track_age_s (default 300 s): if no fresh GPS data arrives
+        # within that window the pilot will transition to Disconnected as
+        # usual, and then to Alert after disconnected_timeout_s.
+        self._last_datetime = datetime.now(timezone.utc)
+
     def request_assistance(self):
         """Escalate a pilot-reported problem to Alert."""
         self._assistance_requested = True
@@ -229,6 +238,10 @@ class Paraglider:
     @property
     def is_high_speed(self):
         return self._avg_speed is not None and self._avg_speed > self._sm['high_speed_mps']
+
+    @property
+    def coordinates(self):
+        return self._coordinates
 
     def update(self, last_state):
         """Write telemetry then let the state machine decide via tick()."""

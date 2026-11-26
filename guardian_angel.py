@@ -10,6 +10,22 @@ from event_replay import EventReplay
 from logger import get_logger
 from paraglider import Paraglider
 
+_DEFAULT_PURETRACK_LOCATION = '44.91038,5.19237'
+
+
+def _puretrack_location(paraglider):
+    coordinates = getattr(paraglider, 'coordinates', None)
+    if (
+        not isinstance(coordinates, (tuple, list))
+        or len(coordinates) != 2
+    ):
+        return _DEFAULT_PURETRACK_LOCATION
+    latitude, longitude = coordinates
+    if latitude is None or longitude is None or (latitude == 0 and longitude == 0):
+        return _DEFAULT_PURETRACK_LOCATION
+    return f'{latitude},{longitude}'
+
+
 class GuardianAngel:
     def __init__(self, cfg, fetch_remote_group=False):
         self.logger = get_logger("GuardianAngel")
@@ -435,7 +451,7 @@ class GuardianAngel:
                             prefix = "🚨 Assistance requested for" if reason == 'assistance_requested' else "⚠️ Alert for"
                             message = (
                                 f"{prefix} [{paraglider.name}]"
-                                f"(https://puretrack.io/?l=44.91038,5.19237&z=15"
+                                f"(https://puretrack.io/?l={_puretrack_location(paraglider)}&z=15"
                                 f"&k={paraglider.puretrack_key})"
                             )
                             contacts = []
@@ -448,14 +464,39 @@ class GuardianAngel:
                         else:
                             message = f"Alert for {payload.get('name')}"
                         if reason == 'assistance_requested':
-                            send_options = {'notification_type': 'assistance'}
-                            supervisor_channel_id = (
-                                getattr(paraglider, 'supervisor_channel_id', None)
-                                if paraglider is not None else None
-                            )
-                            if supervisor_channel_id is not None:
-                                send_options['channel_id'] = supervisor_channel_id
-                            await self.discord_bot.send_message_async(message, **send_options)
+                            if paraglider is not None:
+                                confirmation_options = {
+                                    'mention_first': False,
+                                    'notification_type': 'assistance',
+                                }
+                                pilot_channel_id = getattr(
+                                    paraglider, 'discord_channel_id', None
+                                )
+                                if pilot_channel_id is not None:
+                                    confirmation_options['pilot_channel_id'] = pilot_channel_id
+                                supervisor_channel_id = getattr(
+                                    paraglider, 'supervisor_channel_id', None
+                                )
+                                supervisor_user_ids = getattr(
+                                    paraglider, 'supervisor_user_ids', set()
+                                )
+                                if supervisor_channel_id is not None or supervisor_user_ids:
+                                    confirmation_options.update({
+                                        'supervisor_channel_id': supervisor_channel_id,
+                                        'supervisor_user_ids': supervisor_user_ids,
+                                        'pilot_name': paraglider.name,
+                                    })
+                                await self.discord_bot.post_waiting_landing_confirmation(
+                                    paraglider.discord_user_id or None,
+                                    message,
+                                    paraglider.puretrack_key,
+                                    **confirmation_options,
+                                )
+                            else:
+                                await self.discord_bot.send_message_async(
+                                    message,
+                                    notification_type='assistance',
+                                )
                         elif paraglider is not None:
                             confirmation_options = {
                                 'mention_first': False,
@@ -526,7 +567,7 @@ class GuardianAngel:
                             hour = datetime.now().strftime("%H:%M:%S")
                             message = (
                                 f"[{paraglider.name}]"
-                                f"(https://puretrack.io/?l=44.91038,5.19237&z=15"
+                                f"(https://puretrack.io/?l={_puretrack_location(paraglider)}&z=15"
                                 f"&k={paraglider.puretrack_key})"
                                 f" - 🕵I've detected your landing at {hour} 🏁."
                                 " Is everything ok ❓"
@@ -575,7 +616,7 @@ class GuardianAngel:
                         if paraglider is not None:
                             message = (
                                 f"🛫 Take off [{paraglider.name}]"
-                                f"(https://puretrack.io/?l=44.91038,5.19237&z=15"
+                                f"(https://puretrack.io/?l={_puretrack_location(paraglider)}&z=15"
                                 f"&k={paraglider.puretrack_key})"
                             )
                         else:

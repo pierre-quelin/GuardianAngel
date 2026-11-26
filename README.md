@@ -193,16 +193,17 @@ Intents: default + `message_content` + `reactions`.
 | `ALERT ACKNOWLEDGED` | an alert confirmation was acknowledged by the pilot or a group supervisor |
 | `ASSISTANCE REQUESTED` | pilot replied negatively (`👎` / “I need assistance”) |
 
-Alert and clearance messages include the pilot name, a PureTrack link (`…&k=<puretrack_key>`), and phone/email when present. The initial Alert creates a single supervisor notification; reminder cycles keep only the pilot informed until the alert is acknowledged or cleared. A configured group supervisor can acknowledge even when the pilot has no `discord_user_id`. If the pilot has a `discord_user_id`, they are **mentioned** (and optionally DM’d).
+Alert, clearance, and takeoff messages include the pilot name and a PureTrack link (`…&k=<puretrack_key>`) centered on the pilot's latest known GPS position; if no position is known, the link uses the default location `44.91038,5.19237`. Alert messages also include phone/email when present. The initial Alert creates a single supervisor notification; reminder cycles keep only the pilot informed until the alert is acknowledged or cleared. A configured group supervisor can acknowledge even when the pilot has no `discord_user_id`. If the pilot has a `discord_user_id`, they are **mentioned** (and optionally DM’d).
 
 **Inbound confirmation** (tied to the PureTrack key of the message, so several pilots can share one Discord user):
 
 * Who may reply: the targeted pilot **or** a supervisor ID listed for the pilot's group. Supervisors can only acknowledge requests for their own group. Others get “not addressed”.
-* Reply to or react to the confirmation prompt in the pilot channel or optional DM: positive (`yes`, `I am safe`, `I am safe and have landed`, `👍` / `👌`) → `landingConfirmed()` → `Landed`; negative (`no`, `I need assistance`, `I am not safe`, `👎`) → Clearance escalates to `Alert`, supervisors get `ASSISTANCE REQUESTED`. The prompt defines both reactions.
+* Reply to or react to the confirmation prompt in the pilot channel or optional DM: positive (`yes`, `I am safe`, `I am safe and have landed`, `👍` / `👌`) → `landingConfirmed()` → `Landed`; negative (`no`, `I need assistance`, `I am not safe`, `👎`) → Clearance escalates to `Alert`, supervisors get `ASSISTANCE REQUESTED`. The prompt defines both reactions; skin-tone variants are accepted.
 * After a negative response, the follow-up message explains the next actions. Replying to or reacting to that follow-up with `👍` confirms the pilot is safe and landed, cancelling the assistance request and clearing the alert; `👎` confirms assistance is still needed.
-* To report a problem at any time, a pilot reacts with `👎` to the separate plain-text instruction message sent at startup (not the startup embed). The bot raises an alert and sends a follow-up that can be answered with `👍` to clear it. Handled via `on_raw_reaction_add` so it works if the message is not in cache.
+* To report a problem at any time, a pilot reacts with `👎` to the separate plain-text instruction message sent at startup (not the startup embed). The bot raises an alert and sends a follow-up that can be answered with `👍` to clear it. A positive response to the startup problem-report instruction is ignored. Handled via `on_raw_reaction_add` so it works if the message is not in cache.
+* Active alert confirmations, assistance notifications, and startup problem-report messages are persisted. React with `👍` to the assistance notification or its pilot-channel prompt to acknowledge and clear the alert; these messages remain actionable after a bot restart. Other pending confirmations expire after 300 s.
 * Audit: Discord events carry `actor_role` (`pilot` | `supervisor`); persisted machine-state `source` is `supervisor` when a supervisor acknowledges.
-* Pending confirmations expire after 300 s. Unrecognised replies get a short hint; the original message stays open.
+* Unrecognised replies get a short hint; the original message stays open.
 
 **Commands** (prefix `>`): `echo`, `check @member` (placeholder “is flying” + PureTrack group link).
 
@@ -280,7 +281,14 @@ state Root {
     }
 
     state Landed {
+        Landed : entry / _last_datetime = now()
     }
+
+    note right of Landed
+      entry / _last_datetime = now()
+      Grace window = max_track_age_s after landingConfirmed():
+      stale GPS does not immediately re-trigger Disconnected → Alert.
+    end note
 
     note right of Disconnected
       entry / arm_timer(disconnected_timeout_s)

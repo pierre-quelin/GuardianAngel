@@ -365,6 +365,7 @@ async def test_takeoff_event_sends_discord_embed():
         name='Pilot',
         puretrack_key='X-pilot',
         discord_user_id=123,
+        coordinates=(45.12345, 5.67891),
     )
     angel._paragliders = [paraglider]
     angel.get_paraglider = lambda name: paraglider if name == 'Pilot' else None
@@ -379,6 +380,7 @@ async def test_takeoff_event_sends_discord_embed():
     message, notification_type = sent[0]
     assert notification_type == 'takeoff'
     assert 'Pilot' in message
+    assert 'l=45.12345,5.67891&z=15' in message
     assert '&k=X-pilot' in message
     assert 'group=' not in message
 
@@ -536,6 +538,7 @@ async def test_alert_confirmation_targets_the_paraglider():
         puretrack_key='X-pilot',
         phone_number='',
         email='',
+        coordinates=(45.12345, 5.67891),
     )
     angel._paragliders = [paraglider]
     angel.discord_bot = SimpleNamespace()
@@ -567,7 +570,7 @@ async def test_alert_confirmation_targets_the_paraglider():
 
     assert targeted == [(
         123,
-        '⚠️ Alert for [Pilot](https://puretrack.io/?l=44.91038,5.19237&z=15&k=X-pilot)',
+        '⚠️ Alert for [Pilot](https://puretrack.io/?l=45.12345,5.67891&z=15&k=X-pilot)',
         'X-pilot',
         False,
         'alert',
@@ -641,6 +644,7 @@ async def test_clearance_dispatch_uses_clearance_notification_type():
         puretrack_key='X-pilot',
         phone_number='',
         email='',
+        coordinates=(45.12345, 5.67891),
     )
     angel._paragliders = [paraglider]
     angel.discord_bot = SimpleNamespace()
@@ -663,7 +667,7 @@ async def test_clearance_dispatch_uses_clearance_notification_type():
     assert len(sent) == 1
     discord_id, message, paraglider_key, notification_type = sent[0]
     assert discord_id == 123
-    assert '[Pilot](https://puretrack.io/?l=44.91038,5.19237&z=15&k=X-pilot)' in message
+    assert '[Pilot](https://puretrack.io/?l=45.12345,5.67891&z=15&k=X-pilot)' in message
     assert 'Is everything ok' in message
     assert paraglider_key == 'X-pilot'
     assert notification_type == 'clearance'
@@ -940,9 +944,13 @@ async def test_assistance_alert_uses_assistance_notification_type():
     paraglider = SimpleNamespace(
         name='Pilot',
         discord_user_id=123,
+        discord_channel_id=456,
+        supervisor_channel_id=789,
+        supervisor_user_ids={99},
         puretrack_key='X-pilot',
         phone_number='',
         email='',
+        coordinates=(0.0, 0.0),
     )
     angel._paragliders = [paraglider]
     angel.discord_bot = SimpleNamespace()
@@ -950,7 +958,7 @@ async def test_assistance_alert_uses_assistance_notification_type():
     supervisor_messages = []
 
     async def post_confirmation(*args, **kwargs):
-        targeted.append(args)
+        targeted.append((args, kwargs))
 
     async def send_message(message, notification_type=None):
         supervisor_messages.append((message, notification_type))
@@ -967,12 +975,23 @@ async def test_assistance_alert_uses_assistance_notification_type():
     angel._stop_monitoring.set()
     await task
 
-    assert targeted == []
-    assert supervisor_messages == [(
-        '🚨 Assistance requested for [Pilot]'
-        '(https://puretrack.io/?l=44.91038,5.19237&z=15&k=X-pilot)',
-        'assistance',
+    assert targeted == [(
+        (
+            123,
+            '🚨 Assistance requested for [Pilot]'
+            '(https://puretrack.io/?l=44.91038,5.19237&z=15&k=X-pilot)',
+            'X-pilot',
+        ),
+        {
+            'mention_first': False,
+            'notification_type': 'assistance',
+            'pilot_channel_id': 456,
+            'supervisor_channel_id': 789,
+            'supervisor_user_ids': {99},
+            'pilot_name': 'Pilot',
+        },
     )]
+    assert supervisor_messages == []
 
 
 @pytest.mark.asyncio
@@ -1064,3 +1083,40 @@ async def test_supervisor_confirmation_persists_source_supervisor():
 
     assert paraglider.state == 'Landed'
     assert persisted == [({'X-pilot': 'Landed'}, 'supervisor')]
+
+
+def test_landing_confirmed_refreshes_last_datetime_to_avoid_immediate_reconnect_loop():
+    """Regression test for: Philippe posé + acquittement → Disconnected → Alert en boucle.
+
+    Après landingConfirmed(), on_enter_Landed() doit rafraîchir _last_datetime à now()
+    afin que le pilote ne soit pas immédiatement considéré comme déconnecté (GPS figé).
+    La fenêtre de grâce est max_track_age_s (300 s par défaut).
+    """
+    old_timestamp = datetime.now(timezone.utc) - timedelta(hours=3)
+    p = Paraglider({
+        'name': 'Philippe B.',
+        'puretrack_key': 'X-brierre-philippe1433',
+        'discord_user_id': 994158881905311836,
+        'phone_number': '',
+        'email': '',
+    })
+    # Simuler un GPS figé depuis 3 heures
+    p._last_datetime = old_timestamp
+    # Forcer l'état Alert (timeout Disconnected)
+    p.restore_state('Alert')
+
+    assert p.state == 'Alert'
+    assert p.is_disconnected  # GPS figé → toujours déconnecté avant acquittement
+
+    # Acquittement du pilote ou du superviseur
+    p.landingConfirmed()
+
+    assert p.state == 'Landed'
+    # Après l'acquittement, _last_datetime doit avoir été rafraîchi
+    assert p._last_datetime > old_timestamp
+    # Et le pilote ne doit plus être considéré comme déconnecté (grâce de max_track_age_s)
+    assert not p.is_disconnected, (
+        "Après landingConfirmed(), le pilote ne doit pas être immédiatement "
+        "déconnecté même si le GPS est figé."
+    )
+    p.cleanup()
