@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import discord
 import pytest
 
+import database as db
 from discord_bot import DiscordBot
 from logger import get_logger
 
@@ -259,6 +260,52 @@ async def test_alert_confirmation_places_mention_before_instructions():
 
 
 @pytest.mark.asyncio
+async def test_assistance_embed_and_pilot_prompt_share_acknowledgment():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    bot.discord_channel_id = 55
+    bot.send_confirmation_dm = False
+    bot.landing_to_be_confirmed = {}
+    bot.msg_confirmation_instructions = 'Reply to or react to this message: 👍 / 👎.'
+    bot._ready_event = asyncio.Event()
+    bot._ready_event.set()
+    bot.is_ready = lambda: True
+    sent = []
+
+    async def post_message_to_channel(channel_id, message, embed=None):
+        sent.append((channel_id, message, embed))
+        return 200 + len(sent)
+
+    bot.post_message_to_channel = post_message_to_channel
+
+    await bot.post_waiting_landing_confirmation(
+        7,
+        'Assistance requested for Pilot',
+        'X-pilot',
+        mention_first=False,
+        notification_type='assistance',
+        pilot_channel_id=77,
+        supervisor_channel_id=55,
+        supervisor_user_ids={99},
+        pilot_name='Pilot',
+    )
+
+    assert sent[0][0:2] == (55, None)
+    assert sent[0][2].title == 'ASSISTANCE REQUESTED'
+    assert sent[1] == (
+        77,
+        'Assistance requested for Pilot\n\n<@7> '
+        'Reply to or react to this message: 👍 / 👎.',
+        None,
+    )
+    assert set(bot.landing_to_be_confirmed) == {201, 202}
+    confirmation = bot.landing_to_be_confirmed[201]
+    assert bot.landing_to_be_confirmed[202] is confirmation
+    assert confirmation['notification_type'] == 'assistance'
+    assert confirmation['persistent'] is True
+
+
+@pytest.mark.asyncio
 async def test_confirmation_embed_registers_channel_and_dm_ids_together():
     bot = DiscordBot.__new__(DiscordBot)
     bot.logger = get_logger('test')
@@ -451,6 +498,55 @@ async def test_alert_acknowledgment_notifies_supervisor_channel():
         'acknowledged',
         55,
     )]
+
+
+@pytest.mark.asyncio
+async def test_assistance_acknowledgment_clears_and_notifies_supervisor():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot.logger = get_logger('test')
+    confirmation = {
+        'confirmation_id': 'assistance-confirmation',
+        'discord_id': 7,
+        'paraglider_key': 'X-pilot',
+        'pilot_name': 'Pilot',
+        'notification_type': 'assistance',
+        'channel_id': 77,
+        'supervisor_channel_id': 55,
+        'supervisor_user_ids': {99},
+        'message_ids': {100},
+        'persistent': True,
+    }
+    bot.landing_to_be_confirmed = {100: confirmation}
+    bot.confirmation_store = SimpleNamespace(
+        delete_discord_confirmation=lambda confirmation_id: None,
+    )
+    bot._cleanup_expired_confirmations = lambda: None
+    bot._pending_confirmation_events = asyncio.Queue()
+    bot._positive_reaction_emojis = DiscordBot._POSITIVE_REACTION_EMOJIS
+    bot._negative_reaction_emojis = DiscordBot._NEGATIVE_REACTION_EMOJIS
+    acknowledged = []
+
+    async def post_bye(discord_id, actor_role='pilot', channel_id=None):
+        return None
+
+    async def send_message(message, notification_type=None, channel_id=None):
+        acknowledged.append((message, notification_type, channel_id))
+        return 101
+
+    bot.post_bye = post_bye
+    bot.send_message_async = send_message
+
+    await bot._handle_reaction_confirmation(100, 7, '👍', 'Pilot', channel_id=77)
+
+    event = await bot._pending_confirmation_events.get()
+    assert event['type'] == 'landing_confirmed'
+    assert event['paraglider_key'] == 'X-pilot'
+    assert acknowledged == [(
+        '✅ Alert for **Pilot** acknowledged by pilot <@7>.',
+        'acknowledged',
+        55,
+    )]
+    assert bot.landing_to_be_confirmed == {}
 
 
 @pytest.mark.asyncio
@@ -694,6 +790,10 @@ async def test_startup_notification_goes_to_each_supervisor_channel():
     bot._ttl_cleanup_task = SimpleNamespace(done=lambda: False)
     bot.landing_to_be_confirmed = {}
     bot.msg_hello = 'Bot online'
+    bot.confirmation_store = SimpleNamespace(
+        get_discord_confirmations=lambda: [],
+        save_discord_confirmation=lambda confirmation_id, payload: None,
+    )
     sent = []
 
     async def send_message(message, notification_type=None, channel_id=None):
@@ -715,7 +815,10 @@ async def test_pilot_startup_message_explains_and_registers_problem_signal():
     bot.logger = get_logger('test')
     bot._connection = SimpleNamespace(user=SimpleNamespace(name='Guardian bot'))
     bot._ready_event = asyncio.Event()
+    bot._startup_message_sent = False
+    bot._ttl_cleanup_task = SimpleNamespace(done=lambda: False)
     bot.supervisor_channels = [55]
+    bot.discord_channel_id = 55
     bot.pilot_startup_prompts = [{
         'name': 'Pilot',
         'puretrack_key': 'X-pilot',
@@ -724,8 +827,6 @@ async def test_pilot_startup_message_explains_and_registers_problem_signal():
         'supervisor_channel_id': 55,
         'supervisor_user_ids': {99},
     }]
-    bot._startup_message_sent = False
-    bot._ttl_cleanup_task = SimpleNamespace(done=lambda: False)
     bot.landing_to_be_confirmed = {}
     bot.msg_hello = "I'm connected. 🤓"
     bot.msg_pilot_hello = (
@@ -733,6 +834,16 @@ async def test_pilot_startup_message_explains_and_registers_problem_signal():
         "Your angel will be alerted.\n"
         "Stay safe."
     )
+    stored = {}
+
+    class Store:
+        def get_discord_confirmations(self):
+            return []
+
+        def save_discord_confirmation(self, confirmation_id, payload):
+            stored[confirmation_id] = payload
+
+    bot.confirmation_store = Store()
     sent = []
 
     async def send_message(message, notification_type=None, channel_id=None):
@@ -752,7 +863,8 @@ async def test_pilot_startup_message_explains_and_registers_problem_signal():
     assert confirmation['notification_type'] == 'report_issue'
     assert confirmation['discord_id'] == 7
     assert confirmation['paraglider_key'] == 'X-pilot'
-    assert confirmation['created_at'] is None
+    assert confirmation['persistent'] is True
+    assert stored[confirmation['confirmation_id']]['message_ids'] == [103]
     assert set(bot.landing_to_be_confirmed) == {103}
     assert "I'm connected." not in bot.msg_pilot_hello
 
@@ -817,6 +929,8 @@ async def test_pilot_can_report_problem_with_thumbs_down_on_startup_instructions
             'supervisor_channel_id': 55,
             'channel_id': 77,
             'supervisor_user_ids': {99},
+            'persistent': True,
+            'confirmation_id': 'startup-report',
             'created_at': None,
             'message_ids': {100},
             'completed': False,
@@ -826,6 +940,9 @@ async def test_pilot_can_report_problem_with_thumbs_down_on_startup_instructions
     bot._pending_confirmation_events = asyncio.Queue()
     bot._positive_reaction_emojis = DiscordBot._POSITIVE_REACTION_EMOJIS
     bot._negative_reaction_emojis = DiscordBot._NEGATIVE_REACTION_EMOJIS
+    bot.confirmation_store = SimpleNamespace(
+        save_discord_confirmation=lambda confirmation_id, payload: None,
+    )
     bot.msg_negative_response = (
         "🚨 Your response indicates that you need assistance or are not safe.\n"
         "The alert remains active. The guardian has been notified.\n\n"
@@ -847,9 +964,101 @@ async def test_pilot_can_report_problem_with_thumbs_down_on_startup_instructions
     assert event['type'] == 'assistance_requested'
     assert event['paraglider_key'] == 'X-pilot'
     assert 'reply to this message or react to it:' in sent[0][1]
-    assert 100 in bot.landing_to_be_confirmed
     assert bot.landing_to_be_confirmed[200]['notification_type'] == 'alert'
-    assert bot.landing_to_be_confirmed[200]['created_at'] is None
+    assert bot.landing_to_be_confirmed[200]['persistent'] is True
+
+
+@pytest.mark.asyncio
+async def test_persistent_startup_reaction_is_restored_after_restart(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, 'SessionLocal', None)
+    engine = db.init_db_engine({'url': f'sqlite:///{tmp_path / "confirmations.db"}'})
+    try:
+        original_bot = DiscordBot.__new__(DiscordBot)
+        original_bot.logger = get_logger('test')
+        original_bot.confirmation_store = db
+        original_bot.landing_to_be_confirmed = {}
+        confirmation = {
+            'confirmation_id': 'report-issue-test',
+            'discord_id': 7,
+            'paraglider_key': 'X-pilot',
+            'pilot_name': 'Pilot',
+            'notification_type': 'report_issue',
+            'channel_id': 77,
+            'supervisor_channel_id': 55,
+            'supervisor_user_ids': {99},
+            'persistent': True,
+            'message_ids': set(),
+            'completed': False,
+        }
+        original_bot._register_confirmation_message(12345, confirmation)
+
+        restarted_bot = DiscordBot.__new__(DiscordBot)
+        restarted_bot.logger = get_logger('test')
+        restarted_bot.confirmation_store = db
+        restarted_bot.landing_to_be_confirmed = {}
+        restarted_bot._pending_confirmation_events = asyncio.Queue()
+        restarted_bot._pending_confirmation_ttl = 300
+        restarted_bot._positive_reaction_emojis = DiscordBot._POSITIVE_REACTION_EMOJIS
+        restarted_bot._negative_reaction_emojis = DiscordBot._NEGATIVE_REACTION_EMOJIS
+        sent = []
+
+        async def post_negative_acknowledgment(discord_id, channel_id=None):
+            sent.append((discord_id, channel_id))
+
+        restarted_bot.post_negative_acknowledgment = post_negative_acknowledgment
+        restarted_bot._restore_pending_confirmations()
+
+        await restarted_bot._handle_reaction_confirmation(
+            12345, 7, '👎', 'Pilot', channel_id=77
+        )
+
+        event = await restarted_bot._pending_confirmation_events.get()
+        assert event['type'] == 'landing_rejected'
+        assert event['paraglider_key'] == 'X-pilot'
+        assert sent == [(7, 77)]
+        assert restarted_bot.landing_to_be_confirmed[12345]['notification_type'] == (
+            'report_issue'
+        )
+
+        await restarted_bot._handle_reaction_confirmation(
+            12345, 7, '👍', 'Pilot', channel_id=77
+        )
+        assert restarted_bot._pending_confirmation_events.empty()
+        assert db.get_discord_confirmations()[0][1]['message_ids'] == [12345]
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_positive_reply_to_problem_report_prompt_does_not_clear_alert():
+    bot = DiscordBot.__new__(DiscordBot)
+    bot_user = SimpleNamespace(id=42)
+    bot._connection = SimpleNamespace(user=bot_user)
+    bot.logger = get_logger('test')
+    confirmation = {
+        'discord_id': 7,
+        'paraglider_key': 'X-pilot',
+        'notification_type': 'report_issue',
+    }
+    bot.landing_to_be_confirmed = {100: confirmation}
+    bot._pending_confirmation_events = asyncio.Queue()
+    bot._cleanup_expired_confirmations = lambda: None
+
+    async def process_commands(message):
+        return None
+
+    bot.process_commands = process_commands
+
+    await bot.on_message(SimpleNamespace(
+        author=SimpleNamespace(id=7, name='Pilot'),
+        content='I am safe and have landed',
+        reference=SimpleNamespace(
+            resolved=SimpleNamespace(id=100, author=bot_user),
+        ),
+    ))
+
+    assert bot._pending_confirmation_events.empty()
+    assert bot.landing_to_be_confirmed[100] is confirmation
 
 
 @pytest.mark.asyncio

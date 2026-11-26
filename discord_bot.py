@@ -1,8 +1,10 @@
 import asyncio
 import os
+import uuid
 
 import discord
 from discord.ext import commands
+import database as db
 from logger import get_logger
 
 class DiscordBot(commands.Bot):
@@ -45,6 +47,7 @@ class DiscordBot(commands.Bot):
         if not self.supervisor_channels and self.discord_channel_id not in (None, 0, '0'):
             self.supervisor_channels = [self._normalize_discord_id(self.discord_channel_id)]
         self.send_confirmation_dm = cfg.get('send_confirmation_dm', False)
+        self.pilot_startup_prompts = list(cfg.get('pilot_startup_prompts') or [])
         self.puretrack_grp = cfg.get('puretrack_group') or cfg.get('group')
         self._send_max_retries = int(cfg.get('send_max_retries', 3))
         self._send_base_backoff = float(cfg.get('send_base_backoff', 1.0))
@@ -55,7 +58,7 @@ class DiscordBot(commands.Bot):
             "Your angel will be alerted.\n"
             "Stay safe."
         )
-        self.msg_good_bye = "I'll be back soon... 😴"
+        self.msg_good_bye = "I'll be back soon... 😴\nStay safe."
         self.msg_confirmation_instructions = (
             "To respond, reply to this message or react to it:\n"
             "👍 = I am safe and have landed.\n"
@@ -81,6 +84,7 @@ class DiscordBot(commands.Bot):
 
         # Stores messages awaiting reply: message_id -> confirmation dict
         self.landing_to_be_confirmed = {}
+        self.confirmation_store = db
         self._pending_confirmation_events = asyncio.Queue()
         self._pending_confirmation_ttl = 300
         self._ready_event = asyncio.Event()
@@ -148,6 +152,67 @@ class DiscordBot(commands.Bot):
             return
         self.landing_to_be_confirmed[message_id] = confirmation
         confirmation.setdefault("message_ids", set()).add(message_id)
+        self._persist_confirmation(confirmation)
+
+    def _persist_confirmation(self, confirmation):
+        if not confirmation.get('persistent'):
+            return
+        store = getattr(self, 'confirmation_store', None)
+        if store is None:
+            self.logger.error(
+                "Cannot persist Discord confirmation for %s: no confirmation store configured",
+                confirmation.get('paraglider_key'),
+            )
+            return
+        confirmation_id = confirmation.get('confirmation_id')
+        if confirmation_id is None:
+            confirmation_id = str(uuid.uuid4())
+            confirmation['confirmation_id'] = confirmation_id
+        store.save_discord_confirmation(
+            confirmation_id,
+            {
+                key: value
+                for key, value in confirmation.items()
+                if key not in {'message_ids', 'supervisor_user_ids', 'created_at'}
+            } | {
+                'message_ids': sorted(confirmation.get('message_ids') or []),
+                'supervisor_user_ids': sorted(
+                    confirmation.get('supervisor_user_ids') or [],
+                    key=str,
+                ),
+            },
+        )
+
+    def _restore_pending_confirmations(self):
+        store = getattr(self, 'confirmation_store', None)
+        if store is None:
+            return
+        for confirmation_id, payload in store.get_discord_confirmations():
+            message_ids = {
+                int(message_id) for message_id in payload.get('message_ids', [])
+            }
+            if not message_ids:
+                store.delete_discord_confirmation(confirmation_id)
+                continue
+            confirmation = {
+                **payload,
+                'confirmation_id': confirmation_id,
+                'message_ids': message_ids,
+                'supervisor_user_ids': set(
+                    payload.get('supervisor_user_ids') or []
+                ),
+                'created_at': asyncio.get_running_loop().time(),
+                'persistent': True,
+                'completed': False,
+            }
+            for message_id in message_ids:
+                self.landing_to_be_confirmed[message_id] = confirmation
+            self.logger.info(
+                "Restored persistent confirmation %s for %s across %s message(s)",
+                confirmation_id,
+                confirmation.get('paraglider_key'),
+                len(message_ids),
+            )
 
     def _remove_confirmation(self, confirmation):
         """Remove only message IDs belonging to this confirmation (not other pilots)."""
@@ -155,6 +220,10 @@ class DiscordBot(commands.Bot):
         for message_id, entry in list(self.landing_to_be_confirmed.items()):
             if entry is confirmation:
                 message_ids.add(message_id)
+        if confirmation.get('persistent') and confirmation.get('confirmation_id'):
+            store = getattr(self, 'confirmation_store', None)
+            if store is not None:
+                store.delete_discord_confirmation(confirmation['confirmation_id'])
         for message_id in message_ids:
             self.landing_to_be_confirmed.pop(message_id, None)
         confirmation["message_ids"] = set()
@@ -181,6 +250,7 @@ class DiscordBot(commands.Bot):
     async def on_ready(self):
         self.logger.info(f"Discord bot connected as '{self.user}'")
         self._ready_event.set()
+        self._restore_pending_confirmations()
         if self._ttl_cleanup_task is None or self._ttl_cleanup_task.done():
             self._ttl_cleanup_task = asyncio.create_task(self._ttl_cleanup_loop())
         if not self._startup_message_sent:
@@ -209,30 +279,51 @@ class DiscordBot(commands.Bot):
                     discord_user_id is None and not supervisor_user_ids
                 ):
                     continue
-                message_id = await self.send_message_async(
+                channel_id = self._normalize_discord_id(channel_id)
+                await self.send_message_async(
                     self.msg_hello,
                     notification_type='startup',
                     channel_id=channel_id,
                 )
-                instructions_message_id = await self.send_message_async(
-                    self.msg_pilot_hello,
-                    channel_id=channel_id,
+                confirmation = next(
+                    (
+                        item for item in self.landing_to_be_confirmed.values()
+                        if item.get('notification_type') == 'report_issue'
+                        and item.get('paraglider_key') == pilot.get('puretrack_key')
+                        and not item.get('completed')
+                    ),
+                    None,
                 )
-                if instructions_message_id is not None and (
-                    discord_user_id is not None or supervisor_user_ids
-                ):
+                if confirmation is None:
                     confirmation = {
+                        'confirmation_id': str(uuid.uuid4()),
                         'discord_id': discord_user_id,
                         'paraglider_key': pilot.get('puretrack_key'),
                         'pilot_name': pilot.get('name'),
                         'notification_type': 'report_issue',
-                        'supervisor_channel_id': pilot.get('supervisor_channel_id'),
+                        'supervisor_channel_id': (
+                            self._normalize_discord_id(
+                                pilot.get('supervisor_channel_id')
+                            )
+                            or self._normalize_discord_id(self.discord_channel_id)
+                        ),
                         'channel_id': channel_id,
                         'supervisor_user_ids': supervisor_user_ids,
-                        'created_at': None,
+                        'persistent': True,
+                        'created_at': asyncio.get_running_loop().time(),
                         'message_ids': set(),
                         'completed': False,
                     }
+                    confirmation.update({
+                        'discord_id': discord_user_id,
+                        'channel_id': channel_id,
+                        'supervisor_user_ids': supervisor_user_ids,
+                    })
+                instructions_message_id = await self.send_message_async(
+                    self.msg_pilot_hello,
+                    channel_id=channel_id,
+                )
+                if instructions_message_id is not None:
                     self._register_confirmation_message(
                         instructions_message_id,
                         confirmation,
@@ -284,10 +375,16 @@ class DiscordBot(commands.Bot):
                     actor_role = self._actor_role_for_confirmation(author_id, confirmation)
                     if actor_role is not None:
                         response = self._normalize_reply_text(message.content)
-                        if self._is_positive_reply(response):
-                            if confirmation.get('notification_type') == 'report_issue':
-                                await self.process_commands(message)
-                                return
+                        if (
+                            confirmation.get('notification_type') == 'report_issue'
+                            and self._is_positive_reply(response)
+                        ):
+                            self.logger.info(
+                                "Positive reply ignored on problem-report message %s; "
+                                "only 👎 reports an issue",
+                                ref_message.id,
+                            )
+                        elif self._is_positive_reply(response):
                             self.logger.info(
                                 "User %s (%s) replied to the specific message: %s",
                                 message.author.name,
@@ -419,6 +516,10 @@ class DiscordBot(commands.Bot):
         is_positive = normalized_emoji in positive
         is_report_issue = confirmation.get('notification_type') == 'report_issue'
         if is_positive and is_report_issue:
+            self.logger.info(
+                "Positive reaction ignored on problem-report message %s; only 👎 reports an issue",
+                message_id,
+            )
             return
         self.logger.info(
             "User %s (%s) %s message %s (paraglider_key=%s)",
@@ -494,7 +595,7 @@ class DiscordBot(commands.Bot):
     async def _notify_supervisor_alert_acknowledged(
         self, confirmation, discord_id, actor_role, acknowledgment_channel_id=None
     ):
-        if confirmation.get('notification_type') != 'alert':
+        if confirmation.get('notification_type') not in {'alert', 'assistance'}:
             return None
         channel_id = (
             confirmation.get('supervisor_channel_id')
@@ -637,7 +738,23 @@ class DiscordBot(commands.Bot):
             self._make_notification_embed(notification_type, message)
             if notification_type is not None else None
         )
-        confirmation = {
+        confirmation = next(
+            (
+                item for item in self.landing_to_be_confirmed.values()
+                if notification_type in {'alert', 'assistance', 'report_issue'}
+                and item.get('notification_type') == notification_type
+                and item.get('paraglider_key') == paraglider_key
+                and not item.get('completed')
+            ),
+            None,
+        )
+        if confirmation is None:
+            confirmation = {
+                'confirmation_id': str(uuid.uuid4()),
+                'message_ids': set(),
+                'completed': False,
+            }
+        confirmation.update({
             'discord_id': self._normalize_discord_id(discord_id),
             'paraglider_key': paraglider_key,
             'pilot_name': pilot_name,
@@ -654,15 +771,13 @@ class DiscordBot(commands.Bot):
                 for value in (supervisor_user_ids or [])
                 if self._normalize_discord_id(value) not in (None, 0)
             },
-            'persistent': notification_type == 'alert',
+            'persistent': notification_type in {'alert', 'assistance', 'report_issue'},
             'created_at': None,
-            'message_ids': set(),
-            'completed': False,
-        }
+        })
         sent_message_ids = []
 
         separate_alert = (
-            notification_type == 'alert'
+            notification_type in {'alert', 'assistance'}
             and (supervisor_channel_id or self.discord_channel_id) is not None
             and confirmation['channel_id'] is not None
             and confirmation['channel_id'] != (

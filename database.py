@@ -1,5 +1,6 @@
+import json
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, text, inspect
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, text, inspect
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import Session
@@ -32,6 +33,12 @@ class ParagliderState(Base):
     source = Column(String, nullable=False, default='tracking')
 
 
+class DiscordConfirmation(Base):
+    __tablename__ = 'discord_confirmation'
+    confirmation_id = Column(String, primary_key=True)
+    payload = Column(Text, nullable=False)
+
+
 def init_db_engine(cfg):
     """
     Initialize the database engine and session.
@@ -57,6 +64,54 @@ def init_db_engine(cfg):
     Base.metadata.create_all(engine)
     _migrate_legacy_state_column(engine)
     return engine
+
+
+def save_discord_confirmation(confirmation_id, payload):
+    """Persist a Discord confirmation and all message IDs associated with it."""
+    if SessionLocal is None:
+        raise RuntimeError("Database is not initialized")
+    session = SessionLocal()
+    try:
+        row = session.get(DiscordConfirmation, confirmation_id)
+        serialized_payload = json.dumps(payload)
+        if row is None:
+            session.add(DiscordConfirmation(
+                confirmation_id=confirmation_id,
+                payload=serialized_payload,
+            ))
+        else:
+            row.payload = serialized_payload
+        session.commit()
+    finally:
+        session.close()
+
+
+def get_discord_confirmations():
+    """Return persisted Discord confirmations as (id, payload) pairs."""
+    if SessionLocal is None:
+        raise RuntimeError("Database is not initialized")
+    session = SessionLocal()
+    try:
+        return [
+            (row.confirmation_id, json.loads(row.payload))
+            for row in session.query(DiscordConfirmation).all()
+        ]
+    finally:
+        session.close()
+
+
+def delete_discord_confirmation(confirmation_id):
+    """Delete a completed or cleared Discord confirmation."""
+    if SessionLocal is None:
+        raise RuntimeError("Database is not initialized")
+    session = SessionLocal()
+    try:
+        row = session.get(DiscordConfirmation, confirmation_id)
+        if row is not None:
+            session.delete(row)
+            session.commit()
+    finally:
+        session.close()
 
 
 def get_retention_hours():
